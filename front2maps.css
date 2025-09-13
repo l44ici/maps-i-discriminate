@@ -1,0 +1,16 @@
+.back2maps { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+.b2m-card { border:1px solid #e5e7eb; border-radius:12px; padding:16px; background:#fff; box-shadow:0 2px 8px rgba(0,0,0,.04); }
+.b2m-title { margin:0 0 6px; font-size:1.25rem; }
+.b2m-sub { margin:0 0 12px; color:#6b7280; }
+#b2m-map { height:60vh; min-height:420px; border-radius:12px; overflow:hidden; border:1px solid #e5e7eb; }
+.b2m-note { margin-top:8px; color:#6b7280; font-size:.9rem; }
+
+/* Leaflet info + legend */
+.b2m-info, .b2m-legend {
+  padding:8px 10px; background:rgba(255,255,255,.95);
+  border-radius:8px; box-shadow:0 1px 6px rgba(0,0,0,.08); font-size:14px; line-height:1.3;
+}
+.b2m-legend i {
+  width:14px; height:14px; display:inline-block; margin-right:6px;
+  border-radius:3px; border:1px solid rgba(0,0,0,.15);
+}

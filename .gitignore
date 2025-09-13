@@ -1,0 +1,18 @@
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Node or build tooling (future-proof)
+node_modules/
+
+# IDE/editor settings
+.vscode/
+.idea/
+*.log
+
+# WordPress core safety
+wp-admin/
+wp-includes/
+wp-content/themes/
+wp-content/uploads/
+wp-config.php
