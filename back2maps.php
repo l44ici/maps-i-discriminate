@@ -1,10 +1,5 @@
 <?php
-/**
- * Plugin Name: Back2Maps
- * Description: Interactive Leaflet choropleth with custom Australian regions.
- * Version: 0.1.0
- * Author: You
- */
+
 
 if (!defined('ABSPATH')) exit;
 
@@ -33,17 +28,17 @@ final class Back2Maps {
     $base     = plugin_dir_url(__FILE__);
     $base_dir = plugin_dir_path(__FILE__);
 
-    // Leaflet
+    // Leaflet plugin :PPP
     wp_enqueue_style('leaflet-css', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', [], '1.9.4');
     wp_enqueue_script('leaflet-js',  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',  [], '1.9.4', true);
 
-    // Our assets
+    // Other files 
     $css_ver = file_exists($base_dir.'front2maps.css') ? filemtime($base_dir.'front2maps.css') : '0.1.0';
     $js_ver  = file_exists($base_dir.'hates2map.js')   ? filemtime($base_dir.'hates2map.js')   : '0.1.0';
     wp_enqueue_style('back2maps-css', $base.'front2maps.css', ['leaflet-css'], $css_ver);
     wp_enqueue_script('back2maps-js', $base.'hates2map.js', ['leaflet-js'], $js_ver, true);
 
-    // Path to your custom regions GeoJSON (put the file next to these php/js/css)
+    // Path to regions GeoJSON - make file later
     $regions_url = $base . 'au_regions.geojson';
     wp_localize_script('back2maps-js', 'B2M', [
       'restUrl'        => esc_url_raw( rest_url('back2maps/v1') ),
@@ -59,7 +54,8 @@ final class Back2Maps {
       'permission_callback' => '__return_true'
     ]);
 
-    // Stubbed counts per region_id; replace with real data later.
+    // Stubbed counts per region_id - replace with real data later. 
+    // Might need to change code structure later especially with customised regional divisions
     register_rest_route('back2maps/v1', '/region-metrics', [
       'methods'  => 'GET',
       'callback' => function() {
