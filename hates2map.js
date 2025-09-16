@@ -64,6 +64,10 @@
     return { id, name };
   }
 
+  // NEW: postcode normaliser + helper
+  const normPC = pc => String(pc || '').replace(/\D/g, '').padStart(4, '0');
+  const getSuburbOptions = (pc, POSTCODES) => (POSTCODES[normPC(pc)] || []);
+
   // --- main ---------------------------------------------------------------
 
   document.addEventListener('DOMContentLoaded', async function () {
@@ -84,17 +88,39 @@
       attribution: '© OpenStreetMap contributors'
     }).addTo(map);
     map.fitBounds(AU_BOUNDS);
+
+    // NEW: Fetch postcodes data from REST endpoint
     let POSTCODES = {};
     let ambiguous = [];
     try {
       const res = await fetchJSON(`${B2M.restUrl}/postcodes`);
       POSTCODES = res.postcodes || {};
       ambiguous = res.ambiguous || [];
+      // Expose globally if you need it in other scripts/inspect in console
+      window.B2M_POSTCODES = POSTCODES;
+      window.B2M_AMBIGUOUS = ambiguous;
       console.log('Loaded postcodes:', Object.keys(POSTCODES).length);
       console.log('Ambiguous postcodes:', ambiguous);
     } catch (e) {
       console.warn('Failed to load postcodes', e);
     }
+
+    // NEW: Optional — enrich your existing reports (if present)
+    if (window.hatemapData?.reports?.length) {
+      window.hatemapData.reports = window.hatemapData.reports.map(r => {
+        const pc = normPC(r.postcode);
+        return {
+          ...r,
+          postcode: pc,
+          suburbOptions: POSTCODES[pc] || []   // resolve in UI if >1
+        };
+      });
+      // If you want to react elsewhere, dispatch a custom event
+      document.dispatchEvent(new CustomEvent('b2m:reportsEnriched', {
+        detail: { count: window.hatemapData.reports.length }
+      }));
+    }
+
     // Load regions + metrics
     let geojson = await tryLoad(B2M && B2M.regionsGeoJSON);
     let metrics = {};
@@ -158,3 +184,4 @@
     setTimeout(() => map.invalidateSize(), 100);
   });
 })();
+
