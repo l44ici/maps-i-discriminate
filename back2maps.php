@@ -38,7 +38,7 @@ final class Back2Maps {
     wp_enqueue_script('back2maps-js', $base.'hates2map.js', ['leaflet-js'], $js_ver, true);
 
     // Optional files (safe if missing)
-    $regions_url = $base . 'au_regions.geojson';
+    $regions_url = $base . 'australian-states.min.geojson';
     $metrics_url = $base . 'assets/region_metrics.json';
 
     wp_localize_script('back2maps-js', 'B2M', [
