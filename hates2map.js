@@ -2,9 +2,11 @@
 (function () {
   'use strict';
 
+  // Australia view box
   const AU_BOUNDS = [[-44.0, 112.0], [-10.0, 154.0]];
   const fmt = n => new Intl.NumberFormat().format(n);
 
+  // Choropleth colors
   function getColor(d) {
     return d > 40 ? '#7f0000' :
            d > 30 ? '#b30000' :
@@ -13,35 +15,65 @@
            d >  5 ? '#fdbb84' :
            d >  0 ? '#fee8c8' : '#f7f7f7';
   }
+
+  // Region styles (solid borders)
   const styleFor = c => ({
-    weight: 1, opacity: 1, color: '#ffffff', dashArray: '3',
-    fillOpacity: 0.8, fillColor: getColor(c || 0)
+    weight: 1,
+    opacity: 1,
+    color: '#ffffff',
+    dashArray: '',          // solid line
+    fillOpacity: 0.85,
+    fillColor: getColor(c || 0)
   });
 
+  // --- helpers --------------------------------------------------------------
+
   async function fetchJSON(url, opts = {}) {
-    const headers = Object.assign({}, (opts.headers || {}));
+    const headers = { ...(opts.headers || {}) };
     if (typeof B2M !== 'undefined' && B2M.nonce) headers['X-WP-Nonce'] = B2M.nonce;
     const res = await fetch(url, { ...opts, headers });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   }
+
   async function tryLoad(url) {
+    if (!url) return null;
     try {
       const r = await fetch(url, { cache: 'no-store' });
       if (!r.ok) return null;
       return await r.json();
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }
+
+  // Accept multiple property names from different GeoJSONs
+  function getIds(rawProps = {}) {
+    const props = rawProps || {};
+    const rawId =
+      props.region_id ??
+      props.STATE_CODE ?? props.state_code ??
+      props.code ?? props.abbrev ?? props.name;
+
+    const id = rawId != null ? String(rawId) : undefined;
+
+    const name =
+      props.region_name ??
+      props.STATE_NAME ?? props.name ?? id ?? 'Region';
+
+    return { id, name };
+  }
+
+  // --- main ---------------------------------------------------------------
 
   document.addEventListener('DOMContentLoaded', async function () {
     const root = document.querySelector('.back2maps');
     if (!root) return;
 
-    // Clean shell (note removed)
+    // Minimal shell
     root.innerHTML = `
       <div class="b2m-card">
         <h2 class="b2m-title">Hate Map — Australia</h2>
-        <p class="b2m-sub">Interactive choropleth by custom regions</p>
         <div id="b2m-map"></div>
       </div>
     `;
@@ -52,39 +84,47 @@
       attribution: '© OpenStreetMap contributors'
     }).addTo(map);
     map.fitBounds(AU_BOUNDS);
-
-    // Optional files
-    let geojson = await tryLoad(B2M.regionsGeoJSON);   // ok if null
-    let metricsResp = await tryLoad(B2M.metricsJSON);  // ok if null
+    let POSTCODES = {};
+    let ambiguous = [];
+    try {
+      const res = await fetchJSON(`${B2M.restUrl}/postcodes`);
+      POSTCODES = res.postcodes || {};
+      ambiguous = res.ambiguous || [];
+      console.log('Loaded postcodes:', Object.keys(POSTCODES).length);
+      console.log('Ambiguous postcodes:', ambiguous);
+    } catch (e) {
+      console.warn('Failed to load postcodes', e);
+    }
+    // Load regions + metrics
+    let geojson = await tryLoad(B2M && B2M.regionsGeoJSON);
     let metrics = {};
+    let metricsResp = await tryLoad(B2M && B2M.metricsJSON);
     if (!metricsResp) {
       try { metricsResp = await fetchJSON(`${B2M.restUrl}/region-metrics`); } catch {}
     }
     if (metricsResp && metricsResp.metrics) metrics = metricsResp.metrics;
 
-    // Flexible property names for various GeoJSONs
-    function getIds(props) {
-      const id = props.region_id || props.STATE_CODE || props.state_code || props.code || props.abbrev || props.name;
-      const name = props.region_name || props.STATE_NAME || props.name || id || 'Region';
-      return { id, name };
+    // Build layer
+    let layer;
+
+    function valueForFeature(props) {
+      const { id, name } = getIds(props);
+      // try code first, then name
+      return (metrics[id] ?? metrics[name] ?? 0);
     }
 
-    // Draw polygons (if provided)
-    let layer;
     function rebuildLayer() {
       if (!geojson) return;
       if (layer) layer.remove();
+
       layer = L.geoJSON(geojson, {
-        style: f => {
-          const { id } = getIds(f.properties || {});
-          return styleFor(metrics[id] || 0);
-        },
+        style: f => styleFor(valueForFeature(f.properties)),
         onEachFeature: (feature, l) => {
-          const p = feature.properties || {};
-          const { id, name } = getIds(p);
-          const count = metrics[id] || 0;
+          const { id, name } = getIds(feature.properties);
+          const count = valueForFeature(feature.properties);
 
           l.bindPopup(`<b>${name}</b><br/>Reports: <b>${fmt(count)}</b>`);
+
           l.on({
             mouseover: e => {
               const x = e.target;
@@ -92,8 +132,7 @@
               if (!L.Browser.ie && !L.Browser.opera && !L.Browser.edge) x.bringToFront();
             },
             mouseout: e => {
-              const x = e.target;
-              x.setStyle(styleFor(metrics[id] || 0));
+              e.target.setStyle(styleFor(valueForFeature(feature.properties)));
             },
             click: e => map.fitBounds(e.target.getBounds(), { maxZoom: 8 })
           });
@@ -103,15 +142,19 @@
 
     rebuildLayer();
 
-    // Light auto-refresh of metrics (safe if no polygons)
+    // Light auto-refresh of metrics (no legend/labels)
     async function refreshMetrics() {
       try {
         const data = await fetchJSON(`${B2M.restUrl}/region-metrics`);
         metrics = data.metrics || {};
         rebuildLayer();
-      } catch {}
+      } catch {
+        /* ignore */
+      }
     }
     setInterval(refreshMetrics, 20000);
+
+    // Fix initial sizing when inside hidden layouts
     setTimeout(() => map.invalidateSize(), 100);
   });
 })();
