@@ -35,6 +35,6 @@
   line-height: 1.3;
 }
 
-/* Legend: not used – hide anything that might slip in
-.b2m-legend,
-.info.legend { display: none !important; } */
+/* Hide any Leaflet legend control just in case */
+.info.legend { display: none !important; }
+

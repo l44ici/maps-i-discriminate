@@ -1,4 +1,4 @@
-/* ===== Back2Maps — map only (no legend, no info chip, no helper note) ===== */
+/* ===== Back2Maps — streamlined (no legend, robust loading) ===== */
 (function () {
   'use strict';
 
@@ -32,7 +32,7 @@
     const headers = { ...(opts.headers || {}) };
     if (typeof B2M !== 'undefined' && B2M.nonce) headers['X-WP-Nonce'] = B2M.nonce;
     const res = await fetch(url, { ...opts, headers });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
     return res.json();
   }
 
@@ -64,9 +64,8 @@
     return { id, name };
   }
 
-  // NEW: postcode normaliser + helper
+  // Postcode helpers (optional)
   const normPC = pc => String(pc || '').replace(/\D/g, '').padStart(4, '0');
-  const getSuburbOptions = (pc, POSTCODES) => (POSTCODES[normPC(pc)] || []);
 
   // --- main ---------------------------------------------------------------
 
@@ -89,53 +88,52 @@
     }).addTo(map);
     map.fitBounds(AU_BOUNDS);
 
-    // NEW: Fetch postcodes data from REST endpoint
-    let POSTCODES = {};
-    let ambiguous = [];
+    // Optional: fetch postcodes (safe if not present)
     try {
       const res = await fetchJSON(`${B2M.restUrl}/postcodes`);
-      POSTCODES = res.postcodes || {};
-      ambiguous = res.ambiguous || [];
-      // Expose globally if you need it in other scripts/inspect in console
-      window.B2M_POSTCODES = POSTCODES;
-      window.B2M_AMBIGUOUS = ambiguous;
-      console.log('Loaded postcodes:', Object.keys(POSTCODES).length);
-      console.log('Ambiguous postcodes:', ambiguous);
+      window.B2M_POSTCODES = res.postcodes || {};
+      window.B2M_AMBIGUOUS = res.ambiguous || [];
+      // If you have hatemapData.reports, enrich them
+      if (window.hatemapData?.reports?.length) {
+        window.hatemapData.reports = window.hatemapData.reports.map(r => {
+          const pc = normPC(r.postcode);
+          return { ...r, postcode: pc, suburbOptions: (window.B2M_POSTCODES[pc] || []) };
+        });
+        document.dispatchEvent(new CustomEvent('b2m:reportsEnriched', {
+          detail: { count: window.hatemapData.reports.length }
+        }));
+      }
     } catch (e) {
-      console.warn('Failed to load postcodes', e);
+      console.debug('[B2M] postcodes endpoint not available (ok):', e?.message || e);
     }
 
-    // NEW: Optional — enrich your existing reports (if present)
-    if (window.hatemapData?.reports?.length) {
-      window.hatemapData.reports = window.hatemapData.reports.map(r => {
-        const pc = normPC(r.postcode);
-        return {
-          ...r,
-          postcode: pc,
-          suburbOptions: POSTCODES[pc] || []   // resolve in UI if >1
-        };
-      });
-      // If you want to react elsewhere, dispatch a custom event
-      document.dispatchEvent(new CustomEvent('b2m:reportsEnriched', {
-        detail: { count: window.hatemapData.reports.length }
-      }));
-    }
-
-    // Load regions + metrics
+    // Load regions GeoJSON
     let geojson = await tryLoad(B2M && B2M.regionsGeoJSON);
+    if (!geojson || !geojson.features || !geojson.features.length) {
+      console.error('[B2M] regionsGeoJSON failed to load or is empty:', B2M && B2M.regionsGeoJSON, geojson);
+      // Optional: early return if regions are mandatory
+      // return;
+    }
+
+    // Load metrics (from static JSON or REST)
     let metrics = {};
     let metricsResp = await tryLoad(B2M && B2M.metricsJSON);
     if (!metricsResp) {
-      try { metricsResp = await fetchJSON(`${B2M.restUrl}/region-metrics`); } catch {}
+      try { metricsResp = await fetchJSON(`${B2M.restUrl}/region-metrics`); }
+      catch (e) { console.error('[B2M] region-metrics failed:', e?.message || e); }
     }
-    if (metricsResp && metricsResp.metrics) metrics = metricsResp.metrics;
+    if (metricsResp && metricsResp.metrics) {
+      metrics = metricsResp.metrics;
+    } else {
+      console.warn('[B2M] No region metrics found; regions will render with default colour.');
+    }
 
     // Build layer
     let layer;
 
     function valueForFeature(props) {
       const { id, name } = getIds(props);
-      // try code first, then name
+      // Try code first, then name
       return (metrics[id] ?? metrics[name] ?? 0);
     }
 
@@ -146,7 +144,7 @@
       layer = L.geoJSON(geojson, {
         style: f => styleFor(valueForFeature(f.properties)),
         onEachFeature: (feature, l) => {
-          const { id, name } = getIds(feature.properties);
+          const { name } = getIds(feature.properties);
           const count = valueForFeature(feature.properties);
 
           l.bindPopup(`<b>${name}</b><br/>Reports: <b>${fmt(count)}</b>`);
@@ -168,36 +166,19 @@
 
     rebuildLayer();
 
-    const legend = L.control({ position: 'bottomright' });
-
-    legend.onAdd = function () {
-      const div = L.DomUtil.create('div', 'info legend');
-      const grades = [0, 1, 5, 10, 20, 30, 40];
-
-      for (let i = 0; i < grades.length; i++) {
-        div.innerHTML +=
-          '<i style="background:' + getColor(grades[i] + 1) + '"></i> ' +
-          grades[i] + (grades[i + 1] ? '&ndash;' + grades[i + 1] + '<br>' : '+');
-      }
-      return div;
-    };
-
-    legend.addTo(map);
-
-    // Light auto-refresh of metrics (no legend/labels)
+    // Auto-refresh metrics (optional)
     async function refreshMetrics() {
       try {
         const data = await fetchJSON(`${B2M.restUrl}/region-metrics`);
         metrics = data.metrics || {};
         rebuildLayer();
-      } catch {
-        /* ignore */
+      } catch (e) {
+        console.debug('[B2M] metrics refresh failed (ignored):', e?.message || e);
       }
     }
     setInterval(refreshMetrics, 20000);
 
-    // Fix initial sizing when inside hidden layouts
+    // Fix sizing if inside hidden layouts
     setTimeout(() => map.invalidateSize(), 100);
   });
 })();
-
