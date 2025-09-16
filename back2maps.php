@@ -9,6 +9,27 @@ final class Back2Maps {
     add_action('init',               [$this, 'register_shortcode']);
     add_action('wp_enqueue_scripts', [$this, 'enqueue_assets']);
     add_action('rest_api_init',      [$this, 'register_routes']);
+    add_action('admin_menu', [$this, 'add_admin_page']); // added
+
+    public function add_admin_page() {
+  add_menu_page(
+    'Back2Maps Reports',
+    'Back2Maps',
+    'manage_options',
+    'back2maps-reports',
+    [$this, 'render_admin_page'],
+    'dashicons-location',
+    90
+  );
+}
+
+public function render_admin_page() {
+  echo '<div class="wrap"><h1>Back2Maps — Review Reports</h1>';
+  echo '<p>Here you can review and moderate submitted reports.</p>';
+  echo '<div id="b2m-admin-root"></div>';
+  echo '</div>';
+}
+
   }
 
   /* ---------- Shortcode ---------- */
