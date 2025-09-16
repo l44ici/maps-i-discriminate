@@ -9,27 +9,7 @@ final class Back2Maps {
     add_action('init',               [$this, 'register_shortcode']);
     add_action('wp_enqueue_scripts', [$this, 'enqueue_assets']);
     add_action('rest_api_init',      [$this, 'register_routes']);
-    add_action('admin_menu', [$this, 'add_admin_page']); // added
-
-    public function add_admin_page() {
-  add_menu_page(
-    'Back2Maps Reports',
-    'Back2Maps',
-    'manage_options',
-    'back2maps-reports',
-    [$this, 'render_admin_page'],
-    'dashicons-location',
-    90
-  );
-}
-
-public function render_admin_page() {
-  echo '<div class="wrap"><h1>Back2Maps — Review Reports</h1>';
-  echo '<p>Here you can review and moderate submitted reports.</p>';
-  echo '<div id="b2m-admin-root"></div>';
-  echo '</div>';
-}
-
+    add_action('admin_menu',         [$this, 'add_admin_page']); // NEW: Admin page hook
   }
 
   /* ---------- Shortcode ---------- */
@@ -71,7 +51,6 @@ public function render_admin_page() {
 
   /* ---------- REST API ---------- */
   public function register_routes() {
-
     // Health
     register_rest_route('back2maps/v1', '/ping', [
       'methods'  => 'GET',
@@ -93,102 +72,28 @@ public function render_admin_page() {
       },
       'permission_callback' => '__return_true'
     ]);
-
-    // NEW: Postcodes endpoint (CSV -> JSON)
-    register_rest_route('back2maps/v1', '/postcodes', [
-      'methods'  => 'GET',
-      'callback' => [$this, 'rest_get_postcodes'],
-      'permission_callback' => '__return_true'
-    ]);
   }
 
-  /* ---------- Helpers for CSV parsing ---------- */
-
-  /** Normalize to 4-digit numeric postcode string */
-  private function norm_pc($pc) {
-    $pc = preg_replace('/\D+/', '', (string)$pc);
-    return str_pad($pc, 4, '0', STR_PAD_LEFT);
+  /* ---------- Admin Page ---------- */
+  public function add_admin_page() {
+    add_menu_page(
+      'Back2Maps Reports',     // Page title
+      'Back2Maps',             // Menu label
+      'manage_options',        // Capability
+      'back2maps-reports',     // Menu slug
+      [$this, 'render_admin_page'], // Callback
+      'dashicons-location',    // Icon
+      90                       // Position
+    );
   }
 
-  /** Load CSV and build [ 'postcodes' => ..., 'ambiguous' => ..., 'rows' => N ] */
-  private function build_postcode_payload() {
-    $csvPath = plugin_dir_path(__FILE__) . 'testData.csv';
-
-    if (!file_exists($csvPath)) {
-      return new WP_Error('b2m_csv_missing', 'CSV not found. Expected testData.csv in plugin folder.', ['status' => 404]);
-    }
-
-    $fh = fopen($csvPath, 'r');
-    if ($fh === false) {
-      return new WP_Error('b2m_csv_open', 'Failed to open CSV.', ['status' => 500]);
-    }
-
-    $headers = fgetcsv($fh);
-    if ($headers === false) {
-      fclose($fh);
-      return new WP_Error('b2m_csv_empty', 'CSV appears empty.', ['status' => 400]);
-    }
-
-    // Header indices (case-sensitive to your file)
-    $idxSuburb = array_search('Suburb', $headers);
-    $idxState  = array_search('State / Territory', $headers);
-    $idxPC     = array_search('Post Code', $headers);
-
-    if ($idxSuburb === false || $idxState === false || $idxPC === false) {
-      fclose($fh);
-      return new WP_Error('b2m_csv_headers', 'CSV must contain headers: Suburb, State / Territory, Post Code', [
-        'status'  => 400,
-        'headers' => $headers
-      ]);
-    }
-
-    $postcodes = [];
-    $rows = 0;
-
-    while (($row = fgetcsv($fh)) !== false) {
-      $rows++;
-      $suburb = isset($row[$idxSuburb]) ? trim((string)$row[$idxSuburb]) : '';
-      $state  = isset($row[$idxState])  ? trim((string)$row[$idxState])  : '';
-      $pcRaw  = isset($row[$idxPC])     ? $row[$idxPC]                  : '';
-
-      $pc = $this->norm_pc($pcRaw);
-
-      if ($pc && $suburb !== '') {
-        if (!isset($postcodes[$pc])) $postcodes[$pc] = [];
-        $postcodes[$pc][] = ['suburb' => $suburb, 'state' => $state];
-      }
-    }
-    fclose($fh);
-
-    // Build ambiguous list
-    $ambiguous = [];
-    foreach ($postcodes as $pc => $list) {
-      $states  = array_unique(array_map(fn($x) => $x['state'], $list));
-      $suburbs = array_unique(array_map(fn($x) => $x['suburb'], $list));
-      if (count($states) > 1 || count($suburbs) > 1) {
-        $ambiguous[] = ['postcode' => $pc, 'possibilities' => $list];
-      }
-    }
-
-    return [
-      'postcodes' => $postcodes,
-      'ambiguous' => $ambiguous,
-      'source'    => 'file',
-      'rows'      => $rows
-    ];
-  }
-
-  /** REST callback */
-  public function rest_get_postcodes(\WP_REST_Request $request) {
-    $payload = $this->build_postcode_payload();
-    if (is_wp_error($payload)) {
-      return $payload;
-    }
-
-    // Optional: light client-side caching hint
-    $response = rest_ensure_response($payload);
-    // $response->set_headers(['Cache-Control' => 'no-store']); // or max-age=3600 in production
-    return $response;
+  public function render_admin_page() {
+    echo '<div class="wrap"><h1>Back2Maps — Review Reports</h1>';
+    echo '<p>Here you can review and moderate submitted reports.</p>';
+    echo '<div id="b2m-admin-root">';
+    echo '<p><em>This is where we can load ambiguous postcodes or report data via JS.</em></p>';
+    echo '</div>';
+    echo '</div>';
   }
 }
 
