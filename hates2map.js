@@ -1,4 +1,6 @@
 /* ===== Back2Maps — streamlined (no legend, robust loading) ===== */
+var map; 
+
 (function () {
   'use strict';
 
