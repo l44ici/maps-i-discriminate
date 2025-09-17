@@ -80,28 +80,6 @@ final class Back2Maps {
     ]);
 
   }
-
-  /* ---------- Admin Page ---------- */
-  public function add_admin_page() {
-    add_menu_page(
-      'Back2Maps Reports',     // Page title
-      'Back2Maps',             // Menu label
-      'manage_options',        // Capability
-      'back2maps-reports',     // Menu slug
-      [$this, 'render_admin_page'], // Callback
-      'dashicons-location',    // Icon
-      90                       // Position
-    );
-  }
-
-  public function render_admin_page() {
-    echo '<div class="wrap"><h1>Back2Maps — Review Reports</h1>';
-    echo '<p>Here you can review and moderate submitted reports.</p>';
-    echo '<div id="b2m-admin-root">';
-    echo '<p><em>This is where we can load ambiguous postcodes or report data via JS.</em></p>';
-    echo '</div>';
-    echo '</div>';
-  }
 }
 
 Back2Maps::instance();
