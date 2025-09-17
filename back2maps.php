@@ -58,7 +58,7 @@ final class Back2Maps {
       'permission_callback' => '__return_true'
     ]);
 
-    // NEW: Test data endpoint (CSV -> JSON)
+    // Test data endpoint (CSV -> JSON)
     register_rest_route('back2maps/v1', '/testdata', [
       'methods'  => 'GET',
       'callback' => function() {
