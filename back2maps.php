@@ -39,13 +39,11 @@ final class Back2Maps {
 
     // Optional files (safe if missing)
     $regions_url = $base . 'australian-states.min.geojson';
-    $metrics_url = $base . 'assets/region_metrics.json';
 
     wp_localize_script('back2maps-js', 'B2M', [
       'restUrl'        => esc_url_raw( rest_url('back2maps/v1') ),
       'nonce'          => wp_create_nonce('wp_rest'),
       'regionsGeoJSON' => esc_url_raw($regions_url),
-      'metricsJSON'    => esc_url_raw($metrics_url),
     ]);
   }
 
