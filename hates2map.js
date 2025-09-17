@@ -88,23 +88,35 @@
     }).addTo(map);
     map.fitBounds(AU_BOUNDS);
 
-    // Optional: fetch postcodes (safe if not present)
     try {
-      const res = await fetchJSON(`${B2M.restUrl}/postcodes`);
-      window.B2M_POSTCODES = res.postcodes || {};
-      window.B2M_AMBIGUOUS = res.ambiguous || [];
-      // If you have hatemapData.reports, enrich them
-      if (window.hatemapData?.reports?.length) {
-        window.hatemapData.reports = window.hatemapData.reports.map(r => {
-          const pc = normPC(r.postcode);
-          return { ...r, postcode: pc, suburbOptions: (window.B2M_POSTCODES[pc] || []) };
+      const td = await fetchJSON(`${B2M.restUrl}/testdata`);
+      if (td.rows && td.rows.length) {
+        console.log('[B2M] Loaded test data:', td.count, 'rows');
+
+        td.rows.forEach(r => {
+          // Adjust if your CSV has no lat/lon
+          const lat = parseFloat(r.Latitude);
+          const lon = parseFloat(r.Longitude);
+          const suburb = r.Suburb || '';
+          const state = r['State / Territory'] || '';
+          const pc = r['Post Code'] || '';
+
+          if (!isNaN(lat) && !isNaN(lon)) {
+            L.circleMarker([lat, lon], {
+              radius: 5,
+              fillColor: '#d7301f',
+              color: '#fff',
+              weight: 1,
+              opacity: 1,
+              fillOpacity: 0.8
+            }).addTo(map).bindPopup(
+              `<b>${suburb}</b> (${state} ${pc})<br/>Lat: ${lat}, Lon: ${lon}`
+            );
+          }
         });
-        document.dispatchEvent(new CustomEvent('b2m:reportsEnriched', {
-          detail: { count: window.hatemapData.reports.length }
-        }));
       }
     } catch (e) {
-      console.debug('[B2M] postcodes endpoint not available (ok):', e?.message || e);
+      console.error('[B2M] Failed to load testdata:', e);
     }
 
     // Load regions GeoJSON

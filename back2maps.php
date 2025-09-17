@@ -58,20 +58,27 @@ final class Back2Maps {
       'permission_callback' => '__return_true'
     ]);
 
-    // Region metrics: read from assets/region_metrics.json if present; else empty
-    register_rest_route('back2maps/v1', '/region-metrics', [
+    // NEW: Test data endpoint (CSV -> JSON)
+    register_rest_route('back2maps/v1', '/testdata', [
       'methods'  => 'GET',
       'callback' => function() {
-        $path_file = plugin_dir_path(__FILE__) . 'assets/region_metrics.json';
-        if (file_exists($path_file)) {
-          $raw = file_get_contents($path_file);
-          $json = json_decode($raw, true);
-          if (is_array($json)) return ['metrics' => $json, 'source' => 'file'];
+        $csvPath = plugin_dir_path(__FILE__) . 'testData.csv';
+        if (!file_exists($csvPath)) {
+          return ['rows' => [], 'error' => 'CSV not found'];
         }
-        return ['metrics' => [], 'source' => 'empty'];
+        $rows = array_map('str_getcsv', file($csvPath));
+        $headers = array_map('trim', array_shift($rows));
+        $data = [];
+        foreach ($rows as $r) {
+          $row = [];
+          foreach ($headers as $i => $h) $row[$h] = $r[$i] ?? '';
+          $data[] = $row;
+        }
+        return ['rows' => $data, 'count' => count($data)];
       },
       'permission_callback' => '__return_true'
     ]);
+
   }
 
   /* ---------- Admin Page ---------- */
