@@ -106,7 +106,7 @@
         l.on({
           mouseover: e => {
             const x = e.target;
-            x.setStyle({ weight: 2, color: "#333", dashArray: "", fillOpacity: 0.9 });
+            x.setStyle({ weight: 2, color: "#ffff", dashArray: "", fillOpacity: 0.9 });
             if (!L.Browser.ie && !L.Browser.opera && !L.Browser.edge) x.bringToFront();
           },
           mouseout: e => e.target.setStyle(styleFor()),
