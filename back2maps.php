@@ -3,16 +3,18 @@ if (!defined('ABSPATH')) exit;
 
 final class Back2Maps {
   private static $instance = null;
+
+  /** Singleton accessor */
   public static function instance() { return self::$instance ??= new self(); }
 
+  /** Hook into WP on construction */
   private function __construct() {
-    add_action('init',               [$this, 'register_shortcode']);
-    add_action('wp_enqueue_scripts', [$this, 'enqueue_assets']);
-    add_action('rest_api_init',      [$this, 'register_routes']);
-    add_action('admin_menu',         [$this, 'add_admin_page']); // NEW: Admin page hook
+    add_action('init',               [$this, 'register_shortcode']);   // Adds [back2maps] shortcode
+    add_action('wp_enqueue_scripts', [$this, 'enqueue_assets']);       // Loads CSS/JS on front-end
+    add_action('rest_api_init',      [$this, 'register_routes']);      // Registers REST API endpoints
   }
 
-  /* ---------- Shortcode ---------- */
+  /** Shortcode: outputs container div */
   public function register_shortcode() {
     add_shortcode('back2maps', function($atts){
       $atts = shortcode_atts(['id' => 'back2maps-root'], $atts, 'back2maps');
@@ -22,61 +24,67 @@ final class Back2Maps {
     });
   }
 
-  /* ---------- Assets ---------- */
+  /** Enqueues Leaflet + plugin assets and passes data to JS */
   public function enqueue_assets() {
-    $base     = plugin_dir_url(__FILE__);
-    $base_dir = plugin_dir_path(__FILE__);
+    $base = plugin_dir_url(__FILE__);
+    $dir  = plugin_dir_path(__FILE__);
 
     // Leaflet
-    wp_enqueue_style('leaflet-css', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', [], '1.9.4');
-    wp_enqueue_script('leaflet-js',  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',  [], '1.9.4', true);
+    wp_enqueue_style('leaflet-css','https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',[], '1.9.4');
+    wp_enqueue_script('leaflet-js','https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',[], '1.9.4', true);
 
-    // Our assets (cache-busted)
-    $css_ver = file_exists($base_dir.'front2maps.css') ? filemtime($base_dir.'front2maps.css') : '1.0.0';
-    $js_ver  = file_exists($base_dir.'hates2map.js')   ? filemtime($base_dir.'hates2map.js')   : '1.0.0';
+    // Plugin assets with cache-busting
+    $css_file = $dir.'front2maps.css';
+    $js_file  = $dir.'hates2map.js';
+    $css_ver  = file_exists($css_file) ? filemtime($css_file) : '1.0.0';
+    $js_ver   = file_exists($js_file)  ? filemtime($js_file)  : '1.0.0';
+
     wp_enqueue_style('back2maps-css', $base.'front2maps.css', ['leaflet-css'], $css_ver);
     wp_enqueue_script('back2maps-js', $base.'hates2map.js', ['leaflet-js'], $js_ver, true);
 
-    // Optional files (safe if missing)
-    $regions_url = $base . 'australian-states.min.geojson';
-
+    // Pass REST + GeoJSON URLs to JS
+    $regions_url = $base.'australian-states.min.geojson';
     wp_localize_script('back2maps-js', 'B2M', [
-      'restUrl'        => esc_url_raw( rest_url('back2maps/v1') ),
+      'restUrl'        => esc_url_raw(rest_url('back2maps/v1')),
       'nonce'          => wp_create_nonce('wp_rest'),
       'regionsGeoJSON' => esc_url_raw($regions_url),
     ]);
   }
 
-  /* ---------- REST API ---------- */
+  /** Registers REST API routes (/ping, /testdata) */
   public function register_routes() {
-    // Health
+    // Health check
     register_rest_route('back2maps/v1', '/ping', [
       'methods'  => 'GET',
-      'callback' => fn()=> ['ok'=>true, 'time'=>current_time('mysql')],
+      'callback' => fn()=> ['ok'=>true,'time'=>current_time('mysql')],
       'permission_callback' => '__return_true'
     ]);
 
-    // Test data endpoint (CSV -> JSON)
+    // CSV -> JSON data endpoint
     register_rest_route('back2maps/v1', '/testdata', [
       'methods'  => 'GET',
       'callback' => function() {
-        $csvPath = plugin_dir_path(__FILE__) . 'testData.csv';
-        if (!file_exists($csvPath)) {
-          return ['rows' => [], 'error' => 'CSV not found'];
-        }
-        $rows = array_map('str_getcsv', file($csvPath));
-        $headers = array_map('trim', array_shift($rows));
-        $data = [];
-        foreach ($rows as $r) {
+        $path = plugin_dir_path(__FILE__).'testData.csv';
+        if (!file_exists($path)) return ['rows'=>[], 'count'=>0, 'error'=>'CSV not found'];
+
+        $fh = fopen($path, 'r');
+        if (!$fh) return ['rows'=>[], 'count'=>0, 'error'=>'CSV open failed'];
+
+        $headers = fgetcsv($fh);
+        if (!$headers) { fclose($fh); return ['rows'=>[], 'count'=>0, 'error'=>'CSV empty']; }
+        $headers = array_map('trim', $headers);
+
+        $rows = [];
+        while (($r = fgetcsv($fh)) !== false) {
           $row = [];
           foreach ($headers as $i => $h) $row[$h] = $r[$i] ?? '';
-          $data[] = $row;
+          $rows[] = $row;
         }
-        return ['rows' => $data, 'count' => count($data)];
+        fclose($fh);
+        return ['rows'=>$rows, 'count'=>count($rows)];
       },
       'permission_callback' => '__return_true'
     ]);
-
   }
 }
 
