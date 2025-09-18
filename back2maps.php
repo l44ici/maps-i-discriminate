@@ -4,7 +4,6 @@ if (!defined('ABSPATH')) exit;
 final class Back2Maps {
   private static $instance = null;
 
-  /** Singleton accessor */
   public static function instance() { return self::$instance ??= new self(); }
 
   /** Hook into WP on construction */
