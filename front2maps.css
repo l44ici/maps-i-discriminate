@@ -55,11 +55,6 @@
   box-shadow: 0 6px 18px rgba(0,0,0,.12);
 }
 
-/* Mobile tweak: slightly shorter map on small screens */
-@media (max-width: 640px) {
-  #b2m-map { height: 55vh; min-height: 360px; }
-}
-
 /* Accessibility: keep visible focus on keyboard nav */
 .leaflet-container :focus-visible {
   outline: 2px solid #2563eb; /* blue-600 */
