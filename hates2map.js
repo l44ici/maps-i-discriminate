@@ -1,4 +1,4 @@
-/* ===== Back2Maps — streamlined (no metrics) ===== */
+/* ===== Back2Maps — streamlined (hover + click polished) ===== */
 (() => {
   "use strict";
 
@@ -98,24 +98,49 @@
       return;
     }
 
-    L.geoJSON(geojson, {
+    // Keep a reference so we can reset styles cleanly
+    let regionsLayer;
+
+    function highlightFeature(e) {
+      const layer = e.target;
+      layer.setStyle({
+        weight: 3,
+        color: "#666",          // fixed: valid hex
+        dashArray: "",
+        fillOpacity: 0.9
+      });
+      if (!L.Browser.ie && !L.Browser.opera && !L.Browser.edge) {
+        layer.bringToFront();
+      }
+    }
+    function resetHighlight(e) {
+      // Use Leaflet's resetStyle for this layer only
+      regionsLayer && regionsLayer.resetStyle(e.target);
+    }
+
+    regionsLayer = L.geoJSON(geojson, {
       style: styleFor,
       onEachFeature: (feature, l) => {
         const { name } = getIds(feature.properties);
         l.bindPopup(`<b>${name}</b>`);
         l.on({
-          mouseover: e => {
-            const x = e.target;
-            x.setStyle({ weight: 2, color: "#ffff", dashArray: "", fillOpacity: 0.9 });
-            if (!L.Browser.ie && !L.Browser.opera && !L.Browser.edge) x.bringToFront();
-          },
-          mouseout: e => e.target.setStyle(styleFor()),
-          click: e => map.fitBounds(e.target.getBounds(), { maxZoom: 8 })
+          mouseover: highlightFeature,
+          mouseout: resetHighlight,
+          click: e => {
+            const layer = e.target;
+            map.fitBounds(layer.getBounds(), { maxZoom: 8, padding: [16,16] });
+            // popup will auto-open because we bound one above
+          }
         });
       }
     }).addTo(map);
 
     /* Resize fix */
     setTimeout(() => map.invalidateSize(), 100);
+
+    /* Optional: pointer cursor on polygons */
+    const css = document.createElement('style');
+    css.textContent = `.leaflet-interactive{cursor:pointer}`;
+    document.head.appendChild(css);
   });
 })();
