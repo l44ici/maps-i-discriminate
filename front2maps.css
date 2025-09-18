@@ -1,65 +1,26 @@
 /* ===== Back2Maps — styles ===== */
 
-/* Root container */
-.back2maps {
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-}
+.back2maps { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
 
-/* Card shell */
 .b2m-card {
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 16px;
-  background: #fff;
+  border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; background: #fff;
   box-shadow: 0 2px 8px rgba(0,0,0,.04);
 }
 .b2m-title { margin: 0 0 6px; font-size: 1.5rem; font-weight: 800; }
 .b2m-sub   { margin: 0 0 12px; color: #6b7280; }
 
-/* Map container */
-#b2m-map {
-  height: 60vh;
-  min-height: 420px;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  overflow: hidden;
-}
+#b2m-map { height: 60vh; min-height: 420px; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; }
 
-/* Small footnote text */
 .b2m-note { margin-top: 8px; font-size: .95rem; color: #6b7280; }
-
-/* Floating info box (optional) */
 .b2m-info {
-  padding: 8px 10px;
-  background: rgba(255,255,255,.95);
-  border-radius: 8px;
-  box-shadow: 0 1px 6px rgba(0,0,0,.08);
-  font-size: 14px;
-  line-height: 1.3;
+  padding: 8px 10px; background: rgba(255,255,255,.95); border-radius: 8px;
+  box-shadow: 0 1px 6px rgba(0,0,0,.08); font-size: 14px; line-height: 1.3;
 }
 
-/* Hide Leaflet legends (not used) */
 .info.legend { display: none !important; }
 
-/* --- Enhancements --- */
-
-/* Pointer cursor on polygons/lines (pairs with your hover JS) */
+/* Enhancements */
 .leaflet-interactive { cursor: pointer; }
-
-/* Make popups a touch crisper */
-.leaflet-popup-content-wrapper {
-  border-radius: 10px;
-  box-shadow: 0 6px 18px rgba(0,0,0,.12);
-}
-.leaflet-popup-tip {
-  box-shadow: 0 6px 18px rgba(0,0,0,.12);
-}
-
-/* Accessibility: keep visible focus on keyboard nav */
-.leaflet-container :focus-visible {
-  outline: 2px solid #2563eb; /* blue-600 */
-  outline-offset: 2px;
-}
-
-.leaflet-interactive { cursor: pointer; }
-
+.leaflet-popup-content-wrapper, .leaflet-popup-tip { box-shadow: 0 6px 18px rgba(0,0,0,.12); }
+@media (max-width: 640px) { #b2m-map { height: 55vh; min-height: 360px; } }
+.leaflet-container :focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
