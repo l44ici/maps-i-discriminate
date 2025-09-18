@@ -61,6 +61,4 @@
   outline-offset: 2px;
 }
 
-.leaflet-interactive { cursor: pointer; }
-.leaflet-popup-content-wrapper, .leaflet-popup-tip { box-shadow: 0 6px 18px rgba(0,0,0,.12); }
 
