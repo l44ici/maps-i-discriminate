@@ -1,59 +1,26 @@
-/* ===== Back2Maps — streamlined (hover + click polished) ===== */
+/* ===== Back2Maps — state + division hover popups ===== */
 (() => {
   "use strict";
 
-  /* Config */
   const AU_BOUNDS = [[-44.0, 112.0], [-10.0, 154.0]];
-  const fmt = n => new Intl.NumberFormat().format(n);
 
-  /* Color scale */
-  const getColor = d =>
-    d > 40 ? "#7f0000" :
-    d > 30 ? "#b30000" :
-    d > 20 ? "#d7301f" :
-    d > 10 ? "#ef6548" :
-    d >  5 ? "#fdbb84" :
-    d >  0 ? "#fee8c8" : "#f7f7f7";
+  // Base styles
+  const stateStyle    = { weight: 2, color: "#4b5563", fillOpacity: 0.05 };
+  const divisionStyle = { weight: 1, color: "#2b2b2b", fillOpacity: 0.25 };
+  const divisionHover = { weight: 3, color: "#666",    fillOpacity: 0.55 };
+  const stateHover    = { weight: 3, color: "#111827", fillOpacity: 0.10 };
 
-  /* Static style (always uses default colour) */
-  const styleFor = () => ({
-    weight: 1,
-    opacity: 1,
-    color: "#ffffff",
-    dashArray: "",
-    fillOpacity: 0.85,
-    fillColor: getColor(0)
-  });
+  // Property helpers (tolerant to different schemas)
+  const getName  = p => p?.division_name || p?.region_name || p?.name || p?.STATE_NAME || "Region";
+  const getState = p => p?.state || p?.STATE || p?.STATE_NAME || p?.ste_name || "";
+  const getId    = p => p?.division_id || p?.region_id || p?.id || getName(p);
 
-  /* HTTP helpers */
-  async function fetchJSON(url, opts = {}) {
-    const headers = { ...(opts.headers || {}) };
-    if (window.B2M?.nonce) headers["X-WP-Nonce"] = B2M.nonce;
-    const res = await fetch(url, { ...opts, headers });
-    if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-    return res.json();
-  }
-  async function tryLoad(url) {
-    if (!url) return null;
-    try {
-      const r = await fetch(url, { cache: "no-store" });
-      return r.ok ? r.json() : null;
-    } catch { return null; }
-  }
-
-  /* Safe id/name extraction */
-  function getIds(props = {}) {
-    const rawId = props.region_id ?? props.STATE_CODE ?? props.state_code ?? props.code ?? props.abbrev ?? props.name;
-    const id = rawId != null ? String(rawId) : undefined;
-    const name = props.region_name ?? props.STATE_NAME ?? props.name ?? id ?? "Region";
-    return { id, name };
-  }
-
+  // Build DOM
   document.addEventListener("DOMContentLoaded", async () => {
     const root = document.querySelector(".back2maps");
     if (!root) return;
 
-    /* Shell */
+    // Keep your existing card skeleton (from your CSS):contentReference[oaicite:3]{index=3}
     root.innerHTML = `
       <div class="b2m-card">
         <h2 class="b2m-title">Hate Map — Australia</h2>
@@ -61,86 +28,85 @@
       </div>
     `;
 
-    /* Map */
+    // Map
     const map = L.map("b2m-map", { zoomSnap: 0.5, worldCopyJump: true });
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: "© OpenStreetMap contributors"
     }).addTo(map);
     map.fitBounds(AU_BOUNDS);
 
-    /* Test points (CSV -> markers) */
-    try {
-      const td = await fetchJSON(`${B2M.restUrl}/testdata`);
-      if (td.rows?.length) {
-        td.rows.forEach(r => {
-          const lat = parseFloat(r.Latitude);
-          const lon = parseFloat(r.Longitude);
-          if (Number.isFinite(lat) && Number.isFinite(lon)) {
-            const suburb = r.Suburb || "";
-            const state  = r["State / Territory"] || "";
-            const pc     = r["Post Code"] || "";
-            L.circleMarker([lat, lon], {
-              radius: 5, fillColor: "#d7301f", color: "#fff", weight: 1, opacity: 1, fillOpacity: 0.8
-            }).addTo(map).bindPopup(
-              `<b>${suburb}</b> (${state} ${pc})<br/>Lat: ${lat}, Lon: ${lon}`
-            );
-          }
-        });
-      }
-    } catch (e) {
-      console.error("[B2M] /testdata failed:", e);
-    }
+    // --- Panes so divisions sit above states and receive events first
+    map.createPane('pane-states');
+    map.getPane('pane-states').style.zIndex = 400;     // below divisions
+    map.createPane('pane-divisions');
+    map.getPane('pane-divisions').style.zIndex = 405;  // above states
 
-    /* Regions GeoJSON (just outline, no metrics) */
-    const geojson = await tryLoad(B2M?.regionsGeoJSON);
-    if (!geojson?.features?.length) {
-      console.error("[B2M] regionsGeoJSON missing/empty:", B2M?.regionsGeoJSON);
+    let stateLayer, divisionsLayer;
+
+    // ---- STATES (background) with hover + popup-on-hover
+    try {
+      const states = await fetch(B2M.statesGeoJSON, { cache: "no-store" }).then(r=>r.json());
+
+      function stateOver(e){ const l=e.target; l.setStyle(stateHover); l.openPopup(); }
+      function stateOut (e){ const l=e.target; stateLayer.resetStyle(l); l.closePopup(); }
+
+      stateLayer = L.geoJSON(states, {
+        pane: 'pane-states',
+        style: () => stateStyle,
+        onEachFeature: (f, l) => {
+          const label = f.properties?.STATE_NAME || f.properties?.name || "State";
+          l.bindPopup(`<strong>${label}</strong>`, { closeButton: false, autoPan: false, offset: [0,0] });
+          l.on({ mouseover: stateOver, mouseout: stateOut });
+        }
+      }).addTo(map);
+    } catch(e){ console.warn("States load failed", e); }
+
+    // ---- REGIONAL DIVISIONS (interactive) with hover + popup-on-hover + click-to-zoom
+    const divisions = await fetch(B2M.divisionsGeoJSON, { cache: "no-store" }).then(r=>r.json()).catch(()=>null);
+    if (!divisions?.features?.length) {
+      console.error("[B2M] regional divisions missing/empty:", B2M?.divisionsGeoJSON);
       return;
     }
 
-    // Keep a reference so we can reset styles cleanly
-    let regionsLayer;
-
-    function highlightFeature(e) {
-      const layer = e.target;
-      layer.setStyle({
-        weight: 3,
-        color: "#666",          
-        dashArray: "",
-        fillOpacity: 0.9
-      });
-      if (!L.Browser.ie && !L.Browser.opera && !L.Browser.edge) {
-        layer.bringToFront();
-      }
+    function divOver(e){
+      const l=e.target;
+      l.setStyle(divisionHover);
+      // bring in front of other divisions for crisp border
+      if (!L.Browser.ie && !L.Browser.opera && !L.Browser.edge) l.bringToFront();
+      l.openPopup();
+      // prevent state hover from stealing the event while inside a division
+      L.DomEvent.stopPropagation(e);
     }
-    function resetHighlight(e) {
-      // Use Leaflet's resetStyle for this layer only
-      regionsLayer && regionsLayer.resetStyle(e.target);
+    function divOut(e){
+      const l=e.target;
+      divisionsLayer.resetStyle(l);
+      l.closePopup();
+      L.DomEvent.stopPropagation(e);
     }
 
-    regionsLayer = L.geoJSON(geojson, {
-      style: styleFor,
-      onEachFeature: (feature, l) => {
-        const { name } = getIds(feature.properties);
-        l.bindPopup(`<b>${name}</b>`);
+    divisionsLayer = L.geoJSON(divisions, {
+      pane: 'pane-divisions',
+      style: () => divisionStyle,
+      onEachFeature: (f, l) => {
+        const nm = getName(f.properties);
+        const st = getState(f.properties);
+        l.bindPopup(`<strong>${nm}</strong>${st?`<div>${st}</div>`:''}`, { closeButton:false, autoPan:false });
+        l.bindTooltip(nm, { sticky:true, direction:'center', opacity:0.85 });
         l.on({
-          mouseover: highlightFeature,
-          mouseout: resetHighlight,
-          click: e => {
-            const layer = e.target;
-            map.fitBounds(layer.getBounds(), { maxZoom: 8, padding: [16,16] });
-            // popup will auto-open because we bound one above
+          mouseover: divOver,
+          mouseout : divOut,
+          click    : () => {
+            map.fitBounds(l.getBounds(), { padding:[16,16], maxZoom: 9 });
+            l.openPopup();
           }
         });
       }
     }).addTo(map);
 
-    /* Resize fix */
-    setTimeout(() => map.invalidateSize(), 100);
-
-    /* Optional: pointer cursor on polygons */
-    const css = document.createElement('style');
-    css.textContent = `.leaflet-interactive{cursor:pointer}`;
-    document.head.appendChild(css);
+    // Optional nicety: when any popup closes, reset styles
+    map.on('popupclose', () => {
+      if (divisionsLayer) divisionsLayer.setStyle(() => divisionStyle);
+      if (stateLayer)     stateLayer.setStyle(() => stateStyle);
+    });
   });
 })();

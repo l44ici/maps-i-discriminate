@@ -61,4 +61,5 @@
   outline-offset: 2px;
 }
 
+.leaflet-interactive { cursor: pointer; }
 
