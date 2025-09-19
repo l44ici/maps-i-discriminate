@@ -1,23 +1,21 @@
-/* ===== Back2Maps — states + regional divisions (polygons only) ===== */
+/* ===== Back2Maps — state hover; divisions visible only when zoomed ===== */
 (() => {
   "use strict";
 
   const AU_BOUNDS = [[-44.0, 112.0], [-10.0, 154.0]];
+  const SHOW_DIV_ZOOM = 6;        // <-- divisions appear at/above this zoom
 
   // Styles
-  const stateBase    = { weight: 2, color: "#4b5563", fillOpacity: 0.05 };
-  const stateHover   = { weight: 3, color: "#111827", fillOpacity: 0.10 };
-  const divBase      = { weight: 1, color: "#2b2b2b", fillOpacity: 0.45 };
-  const divHover     = { weight: 3, color: "#666",    fillOpacity: 0.65 };
+  const stateBase  = { weight: 2, color: "#4b5563", fillOpacity: 0.05 };
+  const stateHover = { weight: 3, color: "#111827", fillOpacity: 0.10 };
 
-  // If you know your property keys, set them explicitly here:
-  const getDivisionCode = p => p?.division_code || p?.code || p?.name || p?.id;
-  const getDivisionName = p => p?.division_code || p?.division_name || p?.name || "Region";
-  const getStateName    = p => p?.state || p?.STATE || p?.STATE_NAME || p?.ste_name || "";
+  // Basic division style (no interactivity)
+  const divStyleHidden = { weight: 1, color: "#2b2b2b", opacity: 0, fillOpacity: 0 };
+  const divStyleShown  = { weight: 1, color: "#2b2b2b", opacity: 1, fillOpacity: 0.35 };
 
   document.addEventListener("DOMContentLoaded", init);
 
-  async function init(){
+  async function init() {
     const root = document.querySelector(".back2maps");
     if (!root) return;
 
@@ -34,17 +32,18 @@
     }).addTo(map);
     map.fitBounds(AU_BOUNDS);
 
-    // Layer order: states under divisions
-    map.createPane('pane-states');    map.getPane('pane-states').style.zIndex = 400;
-    map.createPane('pane-divisions'); map.getPane('pane-divisions').style.zIndex = 405;
+    // Layer order: states above divisions so state hover always works
+    map.createPane('pane-divisions'); map.getPane('pane-divisions').style.zIndex = 395;
+    map.createPane('pane-states');    map.getPane('pane-states').style.zIndex    = 400;
 
-    let stateLayer, divisionsLayer;
-
-    // ---- STATES (background) with hover
+    /* ---- States (hover + popup + click to zoom a bit) ---- */
+    let stateLayer;
     try {
-      const states = await fetch(B2M.statesGeoJSON, { cache: "no-store" }).then(r=>r.json());
+      const states = await fetch(B2M.statesGeoJSON, { cache: "no-store" }).then(r => r.json());
+
       function over(e){ const l=e.target; l.setStyle(stateHover); l.openPopup(); }
       function out (e){ const l=e.target; stateLayer.resetStyle(l); l.closePopup(); }
+      function click(e){ map.fitBounds(e.target.getBounds(), { padding:[16,16], maxZoom: 7.5 }); }
 
       stateLayer = L.geoJSON(states, {
         pane: 'pane-states',
@@ -52,66 +51,60 @@
         onEachFeature: (f, l) => {
           const label = f.properties?.STATE_NAME || f.properties?.name || "State";
           l.bindPopup(`<strong>${label}</strong>`, { closeButton:false, autoPan:false });
-          l.on({ mouseover: over, mouseout: out });
+          l.on({ mouseover: over, mouseout: out, click });
         }
       }).addTo(map);
-    } catch(e){ console.warn("[B2M] states load failed:", e); }
+    } catch (e) {
+      console.warn("[B2M] states load failed:", e);
+    }
 
-    // ---- REGIONAL DIVISIONS (foreground) — polygons only
+    /* ---- Regional divisions (non-interactive; visible only when zoomed) ---- */
     const divisions = await loadDivisions(B2M.divisionsGeoJSON);
     if (!divisions) return;
 
-    function onEachDivision(f, l){
-      const code = String(getDivisionCode(f.properties) || "");
-      const name = getDivisionName(f.properties);
-      const state= getStateName(f.properties);
-
-      l.bindPopup(`<strong>${name}</strong>${state?`<div>${state}</div>`:''}`, { closeButton:false, autoPan:false });
-      l.bindTooltip(name, { sticky:true, direction:'center', opacity:0.85 });
-
-      l.on({
-        mouseover: e => { e.target.setStyle(divHover); e.target.openPopup(); L.DomEvent.stopPropagation(e); },
-        mouseout : e => { divisionsLayer.resetStyle(e.target); e.target.closePopup(); L.DomEvent.stopPropagation(e); },
-        click    : () => { map.fitBounds(l.getBounds(), { padding:[16,16], maxZoom: 9 }); l.openPopup(); }
-      });
-    }
-
-    divisionsLayer = L.geoJSON(divisions, {
+    const divisionsLayer = L.geoJSON(divisions, {
       pane: 'pane-divisions',
       filter: f => ['Polygon','MultiPolygon'].includes(f?.geometry?.type),
-      style: () => divBase,
-      onEachFeature: onEachDivision,
-      pointToLayer: () => null // ignore any stray points
+      style: () => divStyleHidden,
+      interactive: false,          // <- no hover/click; passes events to states
+      pointToLayer: () => null     // safety: ignore any stray points
     }).addTo(map);
 
-    // Reset styles whenever any popup closes
-    map.on('popupclose', () => {
-      if (divisionsLayer) divisionsLayer.setStyle(() => divBase);
-      if (stateLayer)     stateLayer.setStyle(() => stateBase);
-    });
+    // Toggle visibility based on zoom
+    function refreshDivisions() {
+      const show = map.getZoom() >= SHOW_DIV_ZOOM;
+      divisionsLayer.setStyle(() => show ? divStyleShown : divStyleHidden);
+    }
+    map.on('zoomend', refreshDivisions);
+    refreshDivisions(); // set initial state
   }
 
-  // Load divisions; if the file is points-only, warn and skip drawing
+  // Robust loader (GeoJSON or TopoJSON)
   async function loadDivisions(url){
-    const note = msg => {
-      const box = document.createElement('div');
-      box.className = 'b2m-info'; box.style.marginTop = '8px'; box.textContent = msg;
-      document.querySelector('.b2m-card').appendChild(box);
-    };
     try {
       const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const gj = await res.json();
-      if (!gj?.features?.length) { note('Regional divisions file has no features.'); return null; }
+      const raw = await res.json();
 
-      // Quick geometry check
-      const types = gj.features.reduce((a,f)=>{ const t=f?.geometry?.type||'NULL'; a[t]=(a[t]||0)+1; return a; },{});
-      const polyCount = (types.Polygon||0)+(types.MultiPolygon||0);
-      const pointCount= (types.Point||0)+(types.MultiPoint||0);
-      console.log('[B2M] division geometry types:', types);
+      // GeoJSON FeatureCollection
+      if (raw?.type === 'FeatureCollection' && Array.isArray(raw.features)) return raw;
 
-      if (polyCount===0 && pointCount>0){ note('Divisions file contains points; need polygons.'); return null; }
-      return gj;
-    } catch(e){ console.error('[B2M] divisions load failed:', e); return null; }
+      // TopoJSON -> GeoJSON
+      if (raw?.type === 'Topology' && window.topojson) {
+        const names = Object.keys(raw.objects || {});
+        if (!names.length) return null;
+        const fc = topojson.feature(raw, raw.objects[names[0]]);
+        return fc.type === 'FeatureCollection' ? fc : { type:'FeatureCollection', features:[fc] };
+      }
+
+      // Fallback: object with features
+      if (Array.isArray(raw?.features)) return { type:'FeatureCollection', features: raw.features };
+
+      console.warn('[B2M] Unexpected divisions JSON format', raw);
+      return null;
+    } catch (e) {
+      console.error('[B2M] divisions load failed:', e);
+      return null;
+    }
   }
 })();
