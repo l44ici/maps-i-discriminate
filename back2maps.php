@@ -35,6 +35,8 @@ final class Back2Maps {
       '3.1.0',
       true
     );
+    wp_enqueue_script('back2maps-js', $base.'hates2map.js', ['leaflet-js','topojson-client'], filemtime($js_file), true);
+
 
     // Your assets (cache-busted safely)
     $css_file = $dir.'front2maps.css';
