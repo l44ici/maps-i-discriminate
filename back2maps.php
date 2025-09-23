@@ -27,15 +27,27 @@ final class Back2Maps {
     wp_enqueue_style('leaflet-css','https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',[], '1.9.4');
     wp_enqueue_script('leaflet-js','https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',[], '1.9.4', true);
 
-    // Your assets (cache-busted)
+    // TopoJSON client (safe even if your file is plain GeoJSON)
+    wp_enqueue_script(
+      'topojson-client',
+      'https://unpkg.com/topojson-client@3/dist/topojson-client.min.js',
+      [],
+      '3.1.0',
+      true
+    );
+
+    // Your assets (cache-busted safely)
     $css_file = $dir.'front2maps.css';
     $js_file  = $dir.'hates2map.js';
-    wp_enqueue_style ('back2maps-css', $base.'front2maps.css', ['leaflet-css'], filemtime($css_file));
-    wp_enqueue_script('back2maps-js',  $base.'hates2map.js',    ['leaflet-js'],  filemtime($js_file), true);
+    $css_ver  = file_exists($css_file) ? filemtime($css_file) : '1.0.0';
+    $js_ver   = file_exists($js_file)  ? filemtime($js_file)  : '1.0.0';
 
-    // Data files (use your exact names)
+    wp_enqueue_style ('back2maps-css', $base.'front2maps.css', ['leaflet-css'], $css_ver);
+    wp_enqueue_script('back2maps-js',  $base.'hates2map.js', ['leaflet-js','topojson-client'], $js_ver, true);
+
+    // Data files (adjust names if yours differ)
     $states_url    = $base.'australian-states.min.geojson';
-    $divisions_url = $base.'regional_div.json';   // <- your new file (GeoJSON OK even if .json extension)
+    $divisions_url = $base.'regional_div.json'; // can be .geojson or TopoJSON .json
 
     wp_localize_script('back2maps-js', 'B2M', [
       'statesGeoJSON'    => esc_url_raw($states_url),
