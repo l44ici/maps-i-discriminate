@@ -10,8 +10,17 @@
   const stateBase  = { weight: 2, color: "#4b5563", fillOpacity: 0.05 };
   const stateHover = { weight: 3, color: "#111827", fillOpacity: 0.10 };
 
-  const divHidden  = { weight: 1, color: "#2b2b2b", opacity: 0,   fillOpacity: 0   };
-  const divShown   = { weight: 1, color: "#2b2b2b", opacity: 1,   fillOpacity: 0.35 };
+  // Hidden style (zoomed out)
+  const divHidden  = { weight: 0, color: '#000000', opacity: 0, fillOpacity: 0 };
+
+  // Shown style (zoomed in)
+  const divShown   = {
+    weight: 2,              // thicker border
+    color: '#000000',       // solid black border
+    opacity: 0.8,           // strong line visibility
+    fillOpacity: 0          // no fill (transparent inside)
+  };
+
 
   // ---- Boot --------------------------------------------------------------
   document.addEventListener("DOMContentLoaded", init);
