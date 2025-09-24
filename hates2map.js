@@ -10,8 +10,8 @@
   const stateHover = { weight: 3, color: "#71797E", fillOpacity: 0.10 };
 
   // Division “border” styles (no fill)
-  const divHidden  = { weight: 0, color: "#D3D3D3", opacity: 0,   fillOpacity: 0 };
-  const divShown   = { weight: 2, color: "#D3D3D3", opacity: 0.9, fillOpacity: 0 /*, dashArray:"4,3"*/ };
+  const divHidden  = { weight: 0, color: "#71797E", opacity: 0,   fillOpacity: 0 };
+  const divShown   = { weight: 2, color: "#71797E", opacity: 0.9, fillOpacity: 0 /*, dashArray:"4,3"*/ };
 
   document.addEventListener("DOMContentLoaded", init);
 
