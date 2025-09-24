@@ -6,8 +6,8 @@
   const SHOW_DIV_ZOOM = 5.5;   // divisions turn on at/above this zoom
 
   // State styles
-  const stateBase  = { weight: 2, color: "#D3D3D3", fillOpacity: 0.05 };
-  const stateHover = { weight: 3, color: "#D3D3D3", fillOpacity: 0.10 };
+  const stateBase  = { weight: 2, color: "#71797E", fillOpacity: 0.05 };
+  const stateHover = { weight: 3, color: "#71797E", fillOpacity: 0.10 };
 
   // Division “border” styles (no fill)
   const divHidden  = { weight: 0, color: "#D3D3D3", opacity: 0,   fillOpacity: 0 };
