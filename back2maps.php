@@ -46,36 +46,21 @@ final class Back2Maps {
       true
     );
 
-    /* ---------- Data files (robust auto-pick) ---------- */
+    /* ---------- Data files (explicit) ---------- */
+    $states_url    = $base.'australian-states.min.geojson';
+    $divisions_url = $base.'regional_div.json';        // <- YOUR GeoJSON
+    $suburbs_url   = $base.'suburbs.json';             // optional but recommended
+    $cio_url       = $base.'data/cio_loc_data.csv';    // <- YOUR CSV
 
-    // States (GeoJSON)
-    $states_url = $base.'australian-states.min.geojson';
-
-    // Regional divisions: try common names/extensions
-    $div_candidates = [
-      'regional_div.topo.json',
-      'regional_div.json',
-      'regional_div.geojson',
-    ];
-    $divisions_url = '';
-    foreach ($div_candidates as $fname) {
-      if (file_exists($dir.$fname)) { $divisions_url = $base.$fname; break; }
-    }
-
-    // Suburb lookup
-    $suburbs_url = file_exists($dir.'suburbs.json') ? $base.'suburbs.json' : '';
-
-    // CIO data: prefer XLSX, else CSV
-    $cio_xlsx = $dir.'data/cio_loc_data.xlsx';
-    $cio_csv  = $dir.'data/cio_loc_data.csv';
-    $cio_url  = file_exists($cio_xlsx) ? $base.'data/cio_loc_data.xlsx'
-              : (file_exists($cio_csv) ? $base.'data/cio_loc_data.csv' : '');
+    // (Optional) warn in error log if missing
+    if (!file_exists($dir.'regional_div.json')) error_log('[Back2Maps] regional_div.json not found');
+    if (!file_exists($dir.'data/cio_loc_data.csv')) error_log('[Back2Maps] data/cio_loc_data.csv not found');
 
     wp_localize_script('back2maps-js', 'B2M', [
       'statesGeoJSON'    => esc_url_raw($states_url),
-      'divisionsGeoJSON' => esc_url_raw($divisions_url), // may be empty if not found
-      'suburbLookup'     => esc_url_raw($suburbs_url),   // may be empty if not found
-      'cioData'          => esc_url_raw($cio_url),       // one of xlsx/csv or empty
+      'divisionsGeoJSON' => esc_url_raw($divisions_url),
+      'suburbLookup'     => esc_url_raw($suburbs_url),
+      'cioData'          => esc_url_raw($cio_url),
     ]);
   }
 }
