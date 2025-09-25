@@ -3,8 +3,8 @@
   "use strict";
 
   const AU_BOUNDS     = [[-44.0, 112.0], [-10.0, 154.0]];
-  const SHOW_DIV_ZOOM = 4.8;                 // slightly earlier reveal
-  const DIV_OBJECT    = "regional_div";      // TopoJSON object name
+  const SHOW_DIV_ZOOM = 4.3;                 // earlier reveal so you can see shading
+  const DIV_OBJECT    = "regional_div";      // TopoJSON object name (ignored for GeoJSON)
 
   // Styles
   const stateBase  = { weight: 2, color: "#71797E", fillColor: "#f8fafc", fillOpacity: 0.25 };
@@ -17,7 +17,7 @@
   const validPC   = pc => (/^\d{4}$/).test(String(pc ?? "").trim()) ? String(pc).padStart(4,"0") : null;
   const num       = v => Number.isFinite(+v) ? +v : NaN;
 
-  // white -> red
+  // white -> red (more reports = darker)
   const colorRamp = (v, vmax) => {
     if (!vmax || vmax <= 0) return "#ffffff";
     const t = Math.max(0, Math.min(1, v / vmax));
@@ -67,12 +67,14 @@
 
     // Divisions (GeoJSON or TopoJSON)
     const divisionsFC = await loadDivisions(B2M.divisionsGeoJSON, DIV_OBJECT);
-    if (!divisionsFC){ console.warn("[B2M] divisions file missing/unreadable"); return; }
+    if (!divisionsFC){ console.warn("[B2M] divisions file missing/unreadable:", B2M.divisionsGeoJSON); return; }
 
-    // cache polygons as turf objects for fast PIP
-    const divPolys = divisionsFC.features.map(f => ({ f, g: turf.multiPolygon(
-      f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates
-    )}));
+    // Cache polygons as turf objects for fast PIP
+    const divPolys = divisionsFC.features.map(f => ({
+      key: getDivKey(f.properties),
+      f,
+      g: turf.multiPolygon(f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates)
+    }));
 
     let counts = Object.create(null), maxCount = 0;
     const divisionsLayer = L.geoJSON(divisionsFC, {
@@ -93,10 +95,14 @@
     map.on("zoomend", refreshDivisions);
     refreshDivisions();
 
-    // Suburb lookup (optional)
+    // Optional suburb lookup (postcode/suburb → lat/lon)
     let suburbIndex = null;
-    try { suburbIndex = await (await fetch(B2M.suburbLookup, { cache:"no-store" })).json(); }
-    catch(e){ console.warn("[B2M] suburbs.json missing/unreadable:", e); }
+    try {
+      if (B2M.suburbLookup) {
+        suburbIndex = await (await fetch(B2M.suburbLookup, { cache:"no-store" })).json();
+        console.log("[B2M] Suburb index loaded:", suburbIndex?.length ?? 0);
+      }
+    } catch(e){ console.warn("[B2M] suburbs.json missing/unreadable:", e); }
 
     // CIO data from backend only
     const markers = L.layerGroup([], { pane:"pane-markers" }).addTo(map);
@@ -111,7 +117,7 @@
       const ext = B2M.cioData.toLowerCase().split(".").pop();
       let rows = [];
       if (ext === "csv") {
-        rows = await parseCSV(B2M.cioData, true);
+        rows = await parseCSVWithPapa(B2M.cioData);
       } else if (ext === "xlsx" || ext === "xls") {
         const ab = await (await fetch(B2M.cioData, { cache:"no-store" })).arrayBuffer();
         const wb = XLSX.read(ab, { type:"array" });
@@ -122,25 +128,67 @@
         return;
       }
 
+      console.log("[B2M] CIO rows loaded:", rows.length);
+
       markers.clearLayers(); counts = Object.create(null); maxCount = 0;
 
-      let placed = 0;
+      // NORMALIZE COLUMN NAMES ONCE
+      const get = (r, keys) => {
+        for (const k of keys) { if (r[k] != null && String(r[k]).trim() !== "") return r[k]; }
+        return "";
+      };
+
+      let placed = 0, classified = 0;
       for (const r of rows) {
-        const res = await classifyRow(r, suburbIndex, divPolys);
-        if (!res || res.status!=="ok") continue;
+        // normalize
+        const latStr = get(r, ["Latitude","lat","Lat","latitude"]);
+        const lonStr = get(r, ["Longitude","lon","Lon","longitude"]);
+        const lat0   = num(latStr);
+        const lon0   = num(lonStr);
 
-        // Dot marker (comment out block if you want choropleth-only)
-        L.circleMarker([res.lat,res.lon], {
-          radius:5, color:"#b30000", weight:1, fillColor:"#b30000", fillOpacity:.85
-        }).bindPopup(buildPopup(r,res)).addTo(markers);
+        let result;
+        if (Number.isFinite(lat0) && Number.isFinite(lon0)) {
+          result = { status:"ok", lat:lat0, lon:lon0, regionKey: regionFor({lat:lat0,lon:lon0}, divPolys) };
+        } else {
+          const state  = normState(get(r, ["State / Territory","State","state"]));
+          const pc     = validPC(get(r, ["Post Code","postcode","PC","Pcode"]));
+          const suburb = String(get(r, ["Suburb","suburb","Town"])).trim().toUpperCase();
 
-        if (res.regionKey){
-          counts[res.regionKey] = (counts[res.regionKey]||0) + 1;
-          if (counts[res.regionKey] > maxCount) maxCount = counts[res.regionKey];
+          const findPcSt   = (p,s)=> suburbIndex?.find(x=>String(x.postcode)===p && normState(x.state)===s);
+          const findSubSt  = (sb,s)=> suburbIndex?.find(x=>String(x.suburb).toUpperCase()===sb && normState(x.state)===s);
+          const findSubAny = (sb)  => suburbIndex?.find(x=>String(x.suburb).toUpperCase()===sb);
+
+          if (pc) {
+            let hit = (state && findPcSt(pc, state)) || (suburb && state && findSubSt(suburb,state));
+            if (!hit && suburb) hit = findSubAny(suburb);
+            if (hit && Number.isFinite(+hit.lat) && Number.isFinite(+hit.lon)) {
+              result = { status:"ok", lat:+hit.lat, lon:+hit.lon, regionKey: regionFor({lat:+hit.lat,lon:+hit.lon}, divPolys) };
+            }
+          }
+          if (!result && suburb) {
+            let hit = (state && findSubSt(suburb,state)) || findSubAny(suburb);
+            if (hit && Number.isFinite(+hit.lat) && Number.isFinite(+hit.lon)) {
+              result = { status:"ok", lat:+hit.lat, lon:+hit.lon, regionKey: regionFor({lat:+hit.lat,lon:+hit.lon}, divPolys) };
+            }
+          }
         }
+
+        if (!result || result.status !== "ok") continue;
+
+        // Dot marker (comment out if you only want choropleth)
+        L.circleMarker([result.lat,result.lon], {
+          radius:5, color:"#b30000", weight:1, fillColor:"#b30000", fillOpacity:.85
+        }).bindPopup(buildPopup(r,result)).addTo(markers);
         placed++;
+
+        if (result.regionKey){
+          counts[result.regionKey] = (counts[result.regionKey]||0) + 1;
+          if (counts[result.regionKey] > maxCount) maxCount = counts[result.regionKey];
+          classified++;
+        }
       }
-      console.log("[B2M] Plotted points:", placed, "Unique divisions:", Object.keys(counts).length, "Max count:", maxCount);
+
+      console.log("[B2M] Plotted:", placed, "Classified:", classified, "Divisions with data:", Object.keys(counts).length, "Max:", maxCount);
 
       refreshDivisions();
       if (markers.getLayers().length){
@@ -152,50 +200,18 @@
     }
   }
 
-  // ---------- Row classifier ----------
-  async function classifyRow(row, index, divPolys){
-    const lat0 = num(row.Latitude || row.lat || row.Lat || row.latitude);
-    const lon0 = num(row.Longitude|| row.lon || row.Lon || row.longitude);
-    if (Number.isFinite(lat0) && Number.isFinite(lon0)){
-      return { status:"ok", lat:lat0, lon:lon0, regionKey: regionFor({lat:lat0,lon:lon0}, divPolys) };
-    }
-
-    const state  = normState(row["State / Territory"] || row.State || row.state);
-    const pc     = validPC(row["Post Code"] || row.postcode || row.PC || row.Pcode);
-    const suburb = String(row.Suburb || row.suburb || row.Town || "").trim().toUpperCase();
-
-    const findPcSt   = (p,s)=> index?.find(x=>String(x.postcode)===p && normState(x.state)===s);
-    const findSubSt  = (sb,s)=> index?.find(x=>String(x.suburb).toUpperCase()===sb && normState(x.state)===s);
-    const findSubAny = (sb)  => index?.find(x=>String(x.suburb).toUpperCase()===sb);
-
-    if (pc){
-      let hit = (state && findPcSt(pc, state)) || (suburb && state && findSubSt(suburb,state));
-      if (!hit && suburb) hit = findSubAny(suburb);
-      if (hit && Number.isFinite(+hit.lat) && Number.isFinite(+hit.lon)){
-        const lat=+hit.lat, lon=+hit.lon;
-        return { status:"ok", lat, lon, regionKey: regionFor({lat,lon}, divPolys) };
-      }
-    }
-
-    if (suburb){
-      let hit = (state && findSubSt(suburb,state)) || findSubAny(suburb);
-      if (hit && Number.isFinite(+hit.lat) && Number.isFinite(+hit.lon)){
-        const lat=+hit.lat, lon=+hit.lon;
-        return { status:"ok", lat, lon, regionKey: regionFor({lat,lon}, divPolys) };
-      }
-    }
-
-    return { status:"skip" };
+  function buildPopup(r,res){
+    const suburb = r.Suburb || r.suburb || r.Town || "";
+    const state  = r["State / Territory"] || r.State || r.state || "";
+    const pc     = r["Post Code"] || r.postcode || r.PC || r.Pcode || "";
+    return `<div class="b2m-info"><strong>${suburb||"Location"}</strong><br>${[state,pc].filter(Boolean).join(" ")}</div>`;
   }
 
-  // ---------- Region assignment using Turf ----------
   function regionFor(pt, divPolys){
     try {
       const point = turf.point([pt.lon, pt.lat]);
-      for (const {f, g} of divPolys){
-        if (turf.booleanPointInPolygon(point, g)) {
-          return getDivKey(f.properties);
-        }
+      for (const {key, g} of divPolys){
+        if (turf.booleanPointInPolygon(point, g)) return key;
       }
     } catch (e) { /* ignore */ }
     return null;
@@ -205,7 +221,6 @@
     return props?.division_code || props?.region_id || props?.REGION_ID || props?.code || props?.name || props?.id || null;
   }
 
-  // ---------- Divisions loader ----------
   async function loadDivisions(url, topoObjectName){
     try {
       const res = await fetch(url, { cache:"no-store" });
@@ -228,16 +243,18 @@
     }
   }
 
-  // ---------- CSV (remote) ----------
-  async function parseCSV(url, header=true){
-    const txt = await (await fetch(url, { cache:"no-store" })).text();
-    const lines = txt.split(/\r?\n/).filter(Boolean);
-    if (!lines.length) return [];
-    const keys = header ? lines.shift().split(",") : [];
-    return lines.map(l=>{
-      const parts = l.split(",");  // simple CSV; if complex, swap to PapaParse
-      if (header){ const obj={}; keys.forEach((k,i)=> obj[k]=parts[i]||""); return obj; }
-      return parts;
+  // Robust CSV parsing (PapaParse)
+  function parseCSVWithPapa(url){
+    return new Promise((resolve, reject)=>{
+      if (!window.Papa) return reject(new Error("PapaParse not loaded"));
+      Papa.parse(url, {
+        download: true,
+        header: true,
+        skipEmptyLines: true,
+        dynamicTyping: false,
+        complete: res => resolve(res.data || []),
+        error: err => reject(err)
+      });
     });
   }
 })();
