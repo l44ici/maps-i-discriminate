@@ -23,37 +23,45 @@ final class Back2Maps {
     $base = plugin_dir_url(__FILE__);
     $dir  = plugin_dir_path(__FILE__);
 
+    // ---------- Vendor libs ----------
     // Leaflet
     wp_enqueue_style('leaflet-css','https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',[], '1.9.4');
     wp_enqueue_script('leaflet-js','https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',[], '1.9.4', true);
 
-    // TopoJSON client (safe even if your file is plain GeoJSON)
-    wp_enqueue_script(
-      'topojson-client',
-      'https://unpkg.com/topojson-client@3/dist/topojson-client.min.js',
-      [],
-      '3.1.0',
-      true
-    );
-    wp_enqueue_script('back2maps-js', $base.'hates2map.js', ['leaflet-js','topojson-client'], filemtime($js_file), true);
+    // TopoJSON (for regional divisions TopoJSON)
+    wp_enqueue_script('topojson-client','https://unpkg.com/topojson-client@3/dist/topojson-client.min.js',[], '3.1.0', true);
 
+    // CSV/XLSX parsing + geo ops
+    wp_enqueue_script('papaparse','https://unpkg.com/papaparse@5.4.1/papaparse.min.js',[], '5.4.1', true);
+    wp_enqueue_script('xlsx','https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',[], '0.18.5', true);
+    wp_enqueue_script('turf','https://unpkg.com/@turf/turf@6.5.0/turf.min.js',[], '6.5.0', true);
 
-    // Your assets (cache-busted safely)
+    // ---------- Your assets (cache-busted) ----------
     $css_file = $dir.'front2maps.css';
     $js_file  = $dir.'hates2map.js';
+
     $css_ver  = file_exists($css_file) ? filemtime($css_file) : '1.0.0';
     $js_ver   = file_exists($js_file)  ? filemtime($js_file)  : '1.0.0';
 
     wp_enqueue_style ('back2maps-css', $base.'front2maps.css', ['leaflet-css'], $css_ver);
-    wp_enqueue_script('back2maps-js',  $base.'hates2map.js', ['leaflet-js','topojson-client'], $js_ver, true);
+    wp_enqueue_script(
+      'back2maps-js',
+      $base.'hates2map.js',
+      ['leaflet-js','topojson-client','papaparse','xlsx','turf'],
+      $js_ver,
+      true
+    );
 
-    // Data files (adjust names if yours differ)
+    // ---------- Data files ----------
     $states_url    = $base.'australian-states.min.geojson';
-    $divisions_url = $base.'regional_div.json'; // can be .geojson or TopoJSON .json
+    // use your actual filename/extension: .topo.json / .json / .geojson
+    $divisions_url = $base.'regional_div.topo.json';
+    $suburbs_url   = $base.'suburbs.json';
 
     wp_localize_script('back2maps-js', 'B2M', [
       'statesGeoJSON'    => esc_url_raw($states_url),
       'divisionsGeoJSON' => esc_url_raw($divisions_url),
+      'suburbLookup'     => esc_url_raw($suburbs_url),
     ]);
   }
 }
