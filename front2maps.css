@@ -1,35 +1,9 @@
-
-/* ===== Back2Maps — styles ===== */
+/* ===== Back2Maps — clean slate styles ===== */
 .back2maps { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-
-
-.b2m-card{
-  border:1px solid #e5e7eb;border-radius:12px;padding:16px;background:#fff;
-  box-shadow:0 2px 8px rgba(0,0,0,.04);
-}
-.b2m-title{margin:0 0 6px;font-size:1.5rem;font-weight:800;}
-.b2m-sub{margin:0 0 12px;color:#6b7280;}
-
-
-#b2m-map{
-  height:60vh;min-height:420px;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;
-}
-
-
-.b2m-info{
-  padding:8px 10px;background:rgba(255,255,255,.95);border-radius:8px;
-  box-shadow:0 1px 6px rgba(0,0,0,.08);font-size:14px;line-height:1.3;
-}
-
-
-/* Leaflet polish */
-.info.legend{display:none!important;}
-.leaflet-interactive{cursor:pointer;}
-.leaflet-popup-content-wrapper,.leaflet-popup-tip{box-shadow:0 6px 18px rgba(0,0,0,.12);border-radius:10px;}
-.leaflet-container :focus-visible{outline:2px solid #2563eb;outline-offset:2px;}
-.leaflet-overlay-pane path[fill]{transition:fill .25s ease,stroke .25s ease;}
-
-
-@media (max-width:640px){
-  #b2m-map{height:55vh;min-height:360px;}
-}
+.b2m-card  { border:1px solid #e5e7eb; border-radius:12px; padding:16px; background:#fff; box-shadow:0 2px 8px rgba(0,0,0,.04); }
+.b2m-title { margin:0 0 6px; font-size:1.25rem; font-weight:800; }
+.b2m-sub   { margin:0 0 12px; color:#6b7280; }
+#b2m-map   { height:60vh; min-height:420px; border-radius:12px; overflow:hidden; border:1px solid #e5e7eb; }
+.b2m-note  { margin-top:8px; color:#6b7280; font-size:.95rem; }
+.leaflet-container { font: inherit; }
+.leaflet-tooltip { border-radius:8px; padding:6px 8px; }

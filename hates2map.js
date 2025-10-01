@@ -1,297 +1,218 @@
-/* ===== Back2Maps — states, division borders, backend CIO dots + choropleth ===== */
+/* ===== Back2Maps — regions + CSV/XLSX choropleth + markers ===== */
 (() => {
   "use strict";
 
+  const AU_BOUNDS = [[-44.0,112.0],[-10.0,154.0]];
+  const fmt = n => new Intl.NumberFormat().format(n);
 
-  const AU_BOUNDS     = [[-44.0, 112.0], [-10.0, 154.0]];
-  const SHOW_DIV_ZOOM = 4.3;                 // earlier reveal so you can see shading
-  const DIV_OBJECT    = "regional_div";      // TopoJSON object name (ignored for GeoJSON)
+  // ---------- general helpers ----------
+  const pick = (row, keys) => { for (const k of keys) { if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== "") return String(row[k]).trim(); } return undefined; };
+  const getLat    = r => parseFloat(pick(r, ["lat","Lat","LAT","latitude","Latitude"]));
+  const getLon    = r => parseFloat(pick(r, ["lon","Lon","LON","lng","Lng","LNG","longitude","Longitude"]));
+  const getState  = r => pick(r, ["State / Territory","State","state","STATE","Territory"]);
+  const getPC     = r => { const v = pick(r, ["Post Code","postcode","Postcode","PC","Pcode","Zip"]); return v ? String(v).replace(/\D/g,"").padStart(4,"0") : undefined; };
+  const getSuburb = r => pick(r, ["Suburb","suburb","Town","Locality","City"]);
 
+  const regionIdOf = f => { const p = (f && f.properties) || {}; return p.division_code || p.region_id || p.REGION_ID || p.code || p.id || p.name; };
+  const regionStateOf = f => { const p = (f && f.properties) || {}; return p.state || p.STATE || p.State || p.st || null; };
 
-  // Styles
-  const stateBase  = { weight: 2, color: "#71797E", fillColor: "#f8fafc", fillOpacity: 0.25 };
-  const stateHover = { weight: 3, color: "#71797E", fillColor: "#eef2ff", fillOpacity: 0.35 };
-  const divHidden  = { weight: 0, color: "#71797E", opacity: 0,   fillOpacity: 0 };
-  const divShown   = { weight: 2, color: "#71797E", opacity: 0.9, fillOpacity: 0 };
+  function getColor(d){ return d>40?"#7f0000":d>30?"#b30000":d>20?"#d7301f":d>10?"#ef6548":d>5?"#fdbb84":d>0?"#fee8c8":"#f7f7f7"; }
+  const styleForCount = c => ({ weight:1, color:"#71797E", fillOpacity:0.65, fillColor:getColor(c||0) });
 
+  // ---------- loaders ----------
+  async function fetchJSON(url){ const r=await fetch(url,{cache:"no-cache"}); if(!r.ok) throw new Error(`${r.status} ${url}`); return r.json(); }
+  async function fetchText(url){ const r=await fetch(url,{cache:"no-cache"}); if(!r.ok) throw new Error(`${r.status} ${url}`); return r.text(); }
+  async function fetchArrayBuffer(url){ const r=await fetch(url,{cache:"no-cache"}); if(!r.ok) throw new Error(`${r.status} ${url}`); return r.arrayBuffer(); }
 
-  const VALID_STATES = ["NSW","ACT","VIC","QLD","SA","WA","NT","TAS"];
-  const normState = s => { if(!s) return null; const v=String(s).trim().toUpperCase(); return VALID_STATES.includes(v)?v:null; };
-  const validPC   = pc => (/^\d{4}$/).test(String(pc ?? "").trim()) ? String(pc).padStart(4,"0") : null;
-  const num       = v => Number.isFinite(+v) ? +v : NaN;
-
-
-  // white -> red (more reports = darker)
-  const colorRamp = (v, vmax) => {
-    if (!vmax || vmax <= 0) return "#ffffff";
-    const t = Math.max(0, Math.min(1, v / vmax));
-    const r = Math.round(255 - (255-179)*t), g = Math.round(255 - (255-0)*t), b = Math.round(255 - (255-0)*t);
-    return `rgb(${r},${g},${b})`;
-  };
-
-
-  document.addEventListener("DOMContentLoaded", init);
-
-
-  async function init () {
-    const root = document.querySelector(".back2maps");
-    if (!root) return;
-
-
-    root.innerHTML = `
-      <div class="b2m-card">
-        <h2 class="b2m-title">Hate Map — Australia</h2>
-        <div id="b2m-map"></div>
-      </div>
-    `;
-
-
-    const map = L.map("b2m-map", { zoomSnap: 0.5, worldCopyJump: true });
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "© OpenStreetMap contributors"
-    }).addTo(map);
-    map.fitBounds(AU_BOUNDS);
-
-
-    map.createPane("pane-states");    map.getPane("pane-states").style.zIndex = 400;
-    map.createPane("pane-divisions"); map.getPane("pane-divisions").style.zIndex = 405;
-    map.createPane("pane-markers");   map.getPane("pane-markers").style.zIndex  = 410;
-
-
-    // States
-    let stateLayer;
+  async function loadCSVorXLSX(csvUrl, xlsxUrl){
+    // try CSV first
     try {
-      const states = await (await fetch(B2M.statesGeoJSON, { cache: "no-store" })).json();
-      function over(e){ const l=e.target; l.setStyle(stateHover); l.openPopup(); }
-      function out (e){ const l=e.target; stateLayer.resetStyle(l); l.closePopup(); }
-      function click(e){ map.fitBounds(e.target.getBounds(), { padding:[16,16], maxZoom: 7.5 }); }
-      stateLayer = L.geoJSON(states, {
-        pane:"pane-states", style:()=>stateBase,
-        onEachFeature:(f,l)=>{
-          const label = f.properties?.STATE_NAME || f.properties?.name || "State";
-          l.bindPopup(`<strong>${label}</strong>`, { closeButton:false, autoPan:false });
-          l.on({ mouseover:over, mouseout:out, click });
-        }
-      }).addTo(map);
-    } catch(e){ console.warn("[B2M] states load failed:", e); }
-
-
-    // Divisions (GeoJSON or TopoJSON)
-    const divisionsFC = await loadDivisions(B2M.divisionsGeoJSON, DIV_OBJECT);
-    if (!divisionsFC){ console.warn("[B2M] divisions file missing/unreadable:", B2M.divisionsGeoJSON); return; }
-
-
-    // Cache polygons as turf objects for fast PIP
-    const divPolys = divisionsFC.features.map(f => ({
-      key: getDivKey(f.properties),
-      f,
-      g: turf.multiPolygon(f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates)
-    }));
-
-
-    let counts = Object.create(null), maxCount = 0;
-    const divisionsLayer = L.geoJSON(divisionsFC, {
-      pane:"pane-divisions",
-      filter:f=>["Polygon","MultiPolygon"].includes(f?.geometry?.type),
-      style:()=>divHidden, interactive:false
-    }).addTo(map);
-
-
-    const refreshDivisions = () => {
-      const show = map.getZoom() >= SHOW_DIV_ZOOM;
-      divisionsLayer.setStyle(f=>{
-        if(!show) return divHidden;
-        const key = getDivKey(f.properties);
-        const c = counts[key]||0;
-        return { ...divShown, fillOpacity: 0.65, fillColor: colorRamp(c, maxCount) };
-      });
-    };
-    map.on("zoomend", refreshDivisions);
-    refreshDivisions();
-
-
-    // Optional suburb lookup (postcode/suburb → lat/lon)
-    let suburbIndex = null;
+      const csv = await fetchText(csvUrl);
+      if (csv && csv.trim().length) {
+        return await new Promise((res,rej)=>Papa.parse(csv,{header:true,skipEmptyLines:true,transformHeader:h=>String(h).trim(),complete: r=>res(r.data||[]),error:rej}));
+      }
+    } catch(_) { /* will try XLSX */ }
+    // XLSX fallback
     try {
-      if (B2M.suburbLookup) {
-        suburbIndex = await (await fetch(B2M.suburbLookup, { cache:"no-store" })).json();
-        console.log("[B2M] Suburb index loaded:", suburbIndex?.length ?? 0);
-      }
-    } catch(e){ console.warn("[B2M] suburbs.json missing/unreadable:", e); }
-
-
-    // CIO data from backend only
-    const markers = L.layerGroup([], { pane:"pane-markers" }).addTo(map);
-
-
-    if (!B2M.cioData){
-      console.warn("[B2M] No CIO data URL localized (B2M.cioData).");
-      return;
-    }
-    console.log("[B2M] Loading CIO data:", B2M.cioData);
-
-
-    try {
-      const ext = B2M.cioData.toLowerCase().split(".").pop();
-      let rows = [];
-      if (ext === "csv") {
-        rows = await parseCSVWithPapa(B2M.cioData);
-      } else if (ext === "xlsx" || ext === "xls") {
-        const ab = await (await fetch(B2M.cioData, { cache:"no-store" })).arrayBuffer();
-        const wb = XLSX.read(ab, { type:"array" });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        rows = XLSX.utils.sheet_to_json(ws, { defval:"" });
-      } else {
-        console.warn("[B2M] Unsupported CIO file type:", ext);
-        return;
-      }
-
-
-      console.log("[B2M] CIO rows loaded:", rows.length);
-
-
-      markers.clearLayers(); counts = Object.create(null); maxCount = 0;
-
-
-      // NORMALIZE COLUMN NAMES ONCE
-      const get = (r, keys) => {
-        for (const k of keys) { if (r[k] != null && String(r[k]).trim() !== "") return r[k]; }
-        return "";
-      };
-
-
-      let placed = 0, classified = 0;
-      for (const r of rows) {
-        // normalize
-        const latStr = get(r, ["Latitude","lat","Lat","latitude"]);
-        const lonStr = get(r, ["Longitude","lon","Lon","longitude"]);
-        const lat0   = num(latStr);
-        const lon0   = num(lonStr);
-
-
-        let result;
-        if (Number.isFinite(lat0) && Number.isFinite(lon0)) {
-          result = { status:"ok", lat:lat0, lon:lon0, regionKey: regionFor({lat:lat0,lon:lon0}, divPolys) };
-        } else {
-          const state  = normState(get(r, ["State / Territory","State","state"]));
-          const pc     = validPC(get(r, ["Post Code","postcode","PC","Pcode"]));
-          const suburb = String(get(r, ["Suburb","suburb","Town"])).trim().toUpperCase();
-
-
-          const findPcSt   = (p,s)=> suburbIndex?.find(x=>String(x.postcode)===p && normState(x.state)===s);
-          const findSubSt  = (sb,s)=> suburbIndex?.find(x=>String(x.suburb).toUpperCase()===sb && normState(x.state)===s);
-          const findSubAny = (sb)  => suburbIndex?.find(x=>String(x.suburb).toUpperCase()===sb);
-
-
-          if (pc) {
-            let hit = (state && findPcSt(pc, state)) || (suburb && state && findSubSt(suburb,state));
-            if (!hit && suburb) hit = findSubAny(suburb);
-            if (hit && Number.isFinite(+hit.lat) && Number.isFinite(+hit.lon)) {
-              result = { status:"ok", lat:+hit.lat, lon:+hit.lon, regionKey: regionFor({lat:+hit.lat,lon:+hit.lon}, divPolys) };
-            }
-          }
-          if (!result && suburb) {
-            let hit = (state && findSubSt(suburb,state)) || findSubAny(suburb);
-            if (hit && Number.isFinite(+hit.lat) && Number.isFinite(+hit.lon)) {
-              result = { status:"ok", lat:+hit.lat, lon:+hit.lon, regionKey: regionFor({lat:+hit.lat,lon:+hit.lon}, divPolys) };
-            }
-          }
-        }
-
-
-        if (!result || result.status !== "ok") continue;
-
-
-        // Dot marker (comment out if you only want choropleth)
-        L.circleMarker([result.lat,result.lon], {
-          radius:5, color:"#b30000", weight:1, fillColor:"#b30000", fillOpacity:.85
-        }).bindPopup(buildPopup(r,result)).addTo(markers);
-        placed++;
-
-
-        if (result.regionKey){
-          counts[result.regionKey] = (counts[result.regionKey]||0) + 1;
-          if (counts[result.regionKey] > maxCount) maxCount = counts[result.regionKey];
-          classified++;
-        }
-      }
-
-
-      console.log("[B2M] Plotted:", placed, "Classified:", classified, "Divisions with data:", Object.keys(counts).length, "Max:", maxCount);
-
-
-      refreshDivisions();
-      if (markers.getLayers().length){
-        const g = L.featureGroup(markers.getLayers());
-        map.fitBounds(g.getBounds().pad(0.2));
-      }
-    } catch(e){
-      console.error("[B2M] CIO data load failed:", e);
+      const buf = await fetchArrayBuffer(xlsxUrl);
+      const wb  = XLSX.read(buf, { type: "array" });
+      const ws  = wb.Sheets[wb.SheetNames[0]];
+      return XLSX.utils.sheet_to_json(ws, { defval:"", raw:false });
+    } catch(e) {
+      console.error("[B2M] No CSV/XLSX data found", e);
+      return [];
     }
   }
 
-
-  function buildPopup(r,res){
-    const suburb = r.Suburb || r.suburb || r.Town || "";
-    const state  = r["State / Territory"] || r.State || r.state || "";
-    const pc     = r["Post Code"] || r.postcode || r.PC || r.Pcode || "";
-    return `<div class="b2m-info"><strong>${suburb||"Location"}</strong><br>${[state,pc].filter(Boolean).join(" ")}</div>`;
+  async function loadDivisions(url, objName){
+    const raw = await fetchJSON(url);
+    if (raw?.type === "FeatureCollection") return raw;
+    if (raw?.type === "Topology" && window.topojson) {
+      const key = (objName||"").trim() || Object.keys(raw.objects||{})[0];
+      const fc  = topojson.feature(raw, raw.objects[key]);
+      return (fc.type === "FeatureCollection") ? fc : { type:"FeatureCollection", features:[fc] };
+    }
+    throw new Error("Unknown divisions format");
   }
 
-
-  function regionFor(pt, divPolys){
-    try {
-      const point = turf.point([pt.lon, pt.lat]);
-      for (const {key, g} of divPolys){
-        if (turf.booleanPointInPolygon(point, g)) return key;
-      }
-    } catch (e) { /* ignore */ }
+  // ---------- suburb/postcode lookup (optional) ----------
+  let suburbIndex = null; // "STATE|SUBURB|POSTCODE" -> [lon,lat]
+  function buildSuburbIndex(geojson) {
+    const map = new Map();
+    if (!geojson?.features) return map;
+    for (const f of geojson.features) {
+      if (f?.geometry?.type !== "Point") continue;
+      const [lon, lat] = f.geometry.coordinates || [];
+      const P = f.properties || {};
+      const s  = String(P.state || P.State || "").toUpperCase();
+      const sb = String(P.suburb || P.Suburb || P.locality || "").toUpperCase();
+      const pc = String(P.postcode || P.Postcode || P.pc || "").replace(/\D/g,"");
+      const keys = new Set([[s,sb,pc],[s,sb,""],["",sb,pc]].map(a=>a.join("|")));
+      for (const k of keys) if (k.replaceAll("|","") !== "") map.set(k,[lon,lat]);
+    }
+    return map;
+  }
+  function lookupCoords(state, suburb, pc) {
+    if (!suburbIndex) return null;
+    const s  = String(state||"").toUpperCase();
+    const sb = String(suburb||"").toUpperCase();
+    const p  = (pc||"").replace(/\D/g,"");
+    for (const k of [[s,sb,p],[s,sb,""],["",sb,p]].map(a=>a.join("|"))) if (suburbIndex.has(k)) return suburbIndex.get(k);
     return null;
   }
 
+  // ---------- main ----------
+  document.addEventListener("DOMContentLoaded", async () => {
+    // Map
+    const map = L.map("b2m-map", { preferCanvas:true, worldCopyJump:true });
+    map.fitBounds(AU_BOUNDS);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{ attribution:'&copy; OpenStreetMap', maxZoom:18 }).addTo(map);
 
-  function getDivKey(props){
-    return props?.division_code || props?.region_id || props?.REGION_ID || props?.code || props?.name || props?.id || null;
-  }
+    map.createPane("divisions"); map.getPane("divisions").style.zIndex = 410;
+    map.createPane("markers");   map.getPane("markers").style.zIndex = 420;
 
+    // Data state
+    let divisionsFC = { type:"FeatureCollection", features:[] };
+    let statesFC    = { type:"FeatureCollection", features:[] };
+    let divisionsLayer = null;
+    const markers   = L.layerGroup([], { pane:"markers" }).addTo(map);
+    const bbox      = L.latLngBounds();
+    const countsByDivision = new Map(); // divisionId -> count
+    const countsByState    = new Map(); // stateName -> count
 
-  async function loadDivisions(url, topoObjectName){
-    try {
-      const res = await fetch(url, { cache:"no-store" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const raw = await res.json();
+    // Load divisions + states
+    try { divisionsFC = await loadDivisions(B2M.divisionsUrl, B2M.divObject || ""); }
+    catch (e) { console.error("[B2M] divisions load error", e); }
 
+    try { statesFC = await fetchJSON(B2M.statesUrl); }
+    catch (e) { statesFC = { type:"FeatureCollection", features:[] }; }
 
-      if (raw?.type === "FeatureCollection") return raw;
+    // Optional suburb index
+    try { if (B2M.suburbLookup) suburbIndex = buildSuburbIndex(await fetchJSON(B2M.suburbLookup)); }
+    catch (_) { suburbIndex = null; }
 
+    // Draw regions (always visible)
+    divisionsLayer = L.geoJSON(divisionsFC, {
+      pane: "divisions",
+      filter: f => ["Polygon","MultiPolygon"].includes(f?.geometry?.type),
+      style: f => styleForCount(0),
+      onEachFeature: (f, layer) => {
+        const id = regionIdOf(f) || "(unknown)";
+        layer.on({
+          mouseover: () => layer.setStyle({ weight:2, color:"#71797E", fillOpacity:0.75, fillColor:getColor(countsByDivision.get(id)||0) }),
+          mouseout:  () => layer.setStyle(styleForCount(countsByDivision.get(id)||0)),
+          click:     () => {
+            const c = countsByDivision.get(id) || 0;
+            const st = regionStateOf(f) || "—";
+            layer.bindTooltip(`<strong>${id}</strong><br/>State: ${st}<br/>${fmt(c)} report(s)`).openTooltip();
+          }
+        });
+      }
+    }).addTo(map);
 
-      if (raw?.type === "Topology" && window.topojson){
-        const objs = raw.objects || {};
-        const key  = topoObjectName && objs[topoObjectName] ? topoObjectName : Object.keys(objs)[0];
-        if (!key) return null;
-        const fc = topojson.feature(raw, objs[key]);
-        return (fc.type === "FeatureCollection") ? fc : { type:"FeatureCollection", features:[fc] };
+    // CSV/XLSX load
+    const rows = await loadCSVorXLSX(B2M.cioDataCsv, B2M.cioDataXlsx);
+
+    // Helpers
+    function addMarker(lat, lon, props) {
+      L.circleMarker([lat,lon],{
+        radius:5, weight:1, color:"#5b6b75", fillOpacity:0.85, fillColor:"#1f78b4"
+      }).bindTooltip(() => {
+        const lines=[];
+        if (props.suburb) lines.push(`<strong>${props.suburb}</strong>`);
+        if (props.state || props.postcode) lines.push([props.state,props.postcode].filter(Boolean).join(" "));
+        if (props.division) lines.push(props.division);
+        return lines.join("<br/>") || "Report";
+      }).addTo(markers);
+      bbox.extend([lat,lon]);
+    }
+
+    function assignToDivision(lat, lon, rowState){
+      const pt = turf.point([lon,lat]);
+      for (const f of divisionsFC.features) {
+        try {
+          if (turf.booleanPointInPolygon(pt, f)) {
+            const divId = regionIdOf(f) || "(unknown)";
+            const st    = regionStateOf(f) || rowState || "Unknown";
+            countsByDivision.set(divId, (countsByDivision.get(divId)||0) + 1);
+            countsByState.set(st, (countsByState.get(st)||0) + 1);
+            return { division: divId, state: st };
+          }
+        } catch {}
       }
       return null;
-    } catch (e) {
-      console.error("[B2M] divisions load failed:", e);
-      return null;
     }
-  }
 
+    function assignToState(lat, lon, rowState){
+      if (!statesFC.features?.length) return { division:null, state: rowState || "Unassigned" };
+      const pt = turf.point([lon,lat]);
+      for (const f of statesFC.features) {
+        try {
+          if (turf.booleanPointInPolygon(pt, f)) {
+            const p = f.properties || {};
+            const st = p.STATE_NAME || p.name || p.State || p.STATE || rowState || "Unassigned";
+            countsByState.set(st, (countsByState.get(st)||0) + 1);
+            return { division:null, state: st };
+          }
+        } catch {}
+      }
+      const st = rowState || "Unassigned";
+      countsByState.set(st, (countsByState.get(st)||0) + 1);
+      return { division:null, state: st };
+    }
 
-  // Robust CSV parsing (PapaParse)
-  function parseCSVWithPapa(url){
-    return new Promise((resolve, reject)=>{
-      if (!window.Papa) return reject(new Error("PapaParse not loaded"));
-      Papa.parse(url, {
-        download: true,
-        header: true,
-        skipEmptyLines: true,
-        dynamicTyping: false,
-        complete: res => resolve(res.data || []),
-        error: err => reject(err)
-      });
-    });
-  }
+    function repaintDivisions(){
+      divisionsLayer.setStyle(f => styleForCount(countsByDivision.get(regionIdOf(f)) || 0));
+    }
+
+    // Process rows
+    for (const r of rows) {
+      let lat = getLat(r);
+      let lon = getLon(r);
+      const rowState  = getState(r);
+      const rowSuburb = getSuburb(r);
+      const rowPC     = getPC(r);
+
+      // If no coords, try suburb/postcode lookup
+      if ((Number.isNaN(lat) || Number.isNaN(lon) || lat===undefined || lon===undefined) && suburbIndex) {
+        const hit = lookupCoords(rowState, rowSuburb, rowPC);
+        if (hit && hit.length===2) { lon=parseFloat(hit[0]); lat=parseFloat(hit[1]); }
+      }
+      if (Number.isNaN(lat) || Number.isNaN(lon) || lat===undefined || lon===undefined) continue;
+
+      // First try division PIP, else state PIP, else CSV state
+      const inDiv = assignToDivision(lat, lon, rowState);
+      const result = inDiv || assignToState(lat, lon, rowState);
+
+      addMarker(lat, lon, { suburb: rowSuburb, state: result.state, postcode: rowPC, division: result.division });
+    }
+
+    // Final repaint & view
+    repaintDivisions();
+    if (bbox.isValid()) map.fitBounds(bbox.pad(0.15)); else map.fitBounds(AU_BOUNDS);
+
+    // Keep styles consistent on zoom
+    map.on("zoomend", repaintDivisions);
+    setTimeout(() => map.invalidateSize(), 120);
+  });
 })();
