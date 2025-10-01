@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Back2Maps
- * Description: Clean-slate Leaflet map with regions (divisions) + CSV-driven markers & choropleth.
- * Version: 1.1.0
+ * Description: Leaflet map with state regional divisions + CSV-driven markers & choropleth.
+ * Version: 1.2.0
  * Author: You
  */
 
@@ -19,9 +19,7 @@ final class Back2Maps {
 
   public function register_shortcode() {
     add_shortcode('back2maps', function($atts){
-      $atts = shortcode_atts([
-        'height' => '60vh',
-      ], $atts, 'back2maps');
+      $atts = shortcode_atts(['height' => '60vh'], $atts, 'back2maps');
       ob_start(); ?>
       <div class="back2maps">
         <div class="b2m-card">
@@ -35,50 +33,47 @@ final class Back2Maps {
     });
   }
 
-  private function asset_url($rel) {
-    return plugins_url($rel, __FILE__);
-  }
-  private function asset_path($rel) {
-    return plugin_dir_path(__FILE__) . ltrim($rel, '/');
-  }
+  private function url($rel)  { return plugins_url($rel, __FILE__); }
+  private function path($rel) { return plugin_dir_path(__FILE__) . ltrim($rel, '/'); }
 
   public function enqueue_assets() {
     // CSS
     wp_enqueue_style('leaflet', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', [], '1.9.4');
-    wp_enqueue_style('back2maps-css', $this->asset_url('front2maps.css'), [], '1.1.0');
+    wp_enqueue_style('back2maps-css', $this->url('front2maps.css'), [], '1.2.0');
 
     // JS libs
     wp_enqueue_script('leaflet', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', [], '1.9.4', true);
     wp_enqueue_script('papaparse', 'https://unpkg.com/papaparse@5.4.1/papaparse.min.js', [], '5.4.1', true);
     wp_enqueue_script('turf', 'https://unpkg.com/@turf/turf@6.5.0/turf.min.js', [], '6.5.0', true);
+    // TopoJSON client (so we can load either GeoJSON OR TopoJSON divisions)
+    wp_enqueue_script('topojson', 'https://unpkg.com/topojson-client@3/dist/topojson-client.min.js', [], '3.1.0', true);
 
     // Main JS
-    wp_enqueue_script('back2maps-js', $this->asset_url('hates2map.js'), ['leaflet','papaparse','turf'], '1.1.0', true);
+    wp_enqueue_script('back2maps-js', $this->url('hates2map.js'),
+      ['leaflet','papaparse','turf','topojson'], '1.2.0', true);
 
-    // --- Configure your data files here -----------------------------------
-    // Put your files under /wp-content/plugins/back2maps/assets/ and /data/
-    $base_assets = $this->asset_url('assets/');
-    $base_data   = $this->asset_url('data/');
+    // --- Configure your data files (edit paths if your filenames differ) ---
+    $assets = $this->url('assets/');
+    $data   = $this->url('data/');
 
-    // REQUIRED: your regional divisions (GeoJSON FeatureCollection, polygons)
-    // Properties should include a stable identifier: id/code/name (any one is fine).
-    $divisions_url = $base_assets . 'regional_divisions.geojson';
+    // Your existing regional divisions file.
+    // If it's TopoJSON use the .json; if GeoJSON, point to .geojson.
+    $divisions_url = $assets . 'regional_div.json';        // e.g., TopoJSON you already had
+    $div_object    = 'regional_div';                       // the TopoJSON object name (change if different)
+    // If using GeoJSON instead, set $div_object = ''; (it will be ignored)
 
-    // REQUIRED: your incidents CSV (testData.csv). Place it in /data/
-    $cio_url = $base_data . 'testData.csv';
+    // Incidents CSV
+    $cio_url = $data . 'testData.csv';
 
-    // OPTIONAL: suburbs/postcodes lookup for geocoding when CSV has no lat/lon
-    // Expect a FeatureCollection of Points with props: suburb, state, postcode
-    // Example filename: suburbs.min.json (keep it ~few MB for front-end).
-    $suburbs_url = $base_assets . 'suburbs.min.json';
+    // Optional suburbs/postcodes lookup (Point FC with properties suburb/state/postcode)
+    $suburbs_url = $assets . 'suburbs.min.json';
 
-    // Localize for JS
     wp_localize_script('back2maps-js', 'B2M', [
-      'divisionsGeoJSON' => esc_url_raw($divisions_url),
-      'cioData'          => esc_url_raw($cio_url),
-      'suburbLookup'     => esc_url_raw($suburbs_url),
-      // tune marker/choropleth if you want
-      'minZoomForDiv'    => 4.3,
+      'divisionsUrl'   => esc_url_raw($divisions_url),
+      'divObject'      => $div_object,     // ignored for GeoJSON
+      'cioData'        => esc_url_raw($cio_url),
+      'suburbLookup'   => esc_url_raw($suburbs_url),
+      'minZoomForDiv'  => 0,               // 0 => keep regions visible at all zooms
     ]);
   }
 }

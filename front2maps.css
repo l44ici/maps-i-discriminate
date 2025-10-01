@@ -32,9 +32,7 @@
 }
 
 /* Leaflet tweaks */
-.leaflet-container {
-  font: inherit;
-}
+.leaflet-container { font: inherit; }
 .leaflet-tooltip {
   border-radius: 8px;
   padding: 6px 8px;
