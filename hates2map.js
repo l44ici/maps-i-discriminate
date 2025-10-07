@@ -139,8 +139,16 @@
       const ll=rowToLatLon(r,keys,idx);
       if(!ll)continue;
       const [lat,lon]=ll;
-      L.circleMarker([lat,lon],pointStyle)
+      L.circleMarker([lat,lon],pointStyle,)
         .addTo(bubbles);
+      
+      L.circleMarker([lat, lon], {
+        radius: pointStyle.radius + 4,
+        color: 'transparent',
+        fillColor: '#d93b2b',
+        fillOpacity: 0.18,
+        className: 'b2m-dot-halo'
+      }).addTo(bubbleLayer);
       plotted++;
 
       for(const f of regions.features){
