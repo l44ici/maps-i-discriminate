@@ -37,7 +37,7 @@
 
   const styleStates={color:"#fff",weight:1,fillColor:"#f4ebdf",fillOpacity:1};
   const styleRegionsInit={color:"#fff",weight:0.8,fillOpacity:0.2,fillColor:"#FDE68A"};
-  const pointStyle={radius:4,fillColor:"#d93b2b",color:"#a11e14",weight:0.5,fillOpacity:0.75,opacity:0.35};
+  const pointStyle={radius:6,fillColor:"#d93b2b",color:"#a11e14",weight:0.5,fillOpacity:0.75,opacity:0.35};
 
   function buildSuburbIndexes(suburbs){
     const byPC={},bySubState={};
