@@ -14,6 +14,7 @@
   const CSV_URL     = CFG.cioDataCsv;
   const SUBURBS_URL = CFG.suburbLookup;
   const AU_BOUNDS = [[-44,112],[-10,154]];
+  const AU_CLAMP_BOUNDS =[[-47, 108], [-8, 159]];
   const LOG = (...a)=>console.log("[B2M]",...a);
 
   const fetchJSON = u => fetch(u).then(r=>r.ok?r.json():null).catch(()=>null);
@@ -109,7 +110,7 @@
   async function buildMap(){
     if(typeof L==="undefined"){console.error("[B2M] Leaflet missing");return;}
 
-    const map=L.map(ROOT_ID,{zoomControl:true,minZoom:3,maxZoom:12});
+    const map=L.map(ROOT_ID,{zoomControl:true,minZoom:3,maxZoom:12, maxBounds: AU_CLAMP_BOUNDS, maxBoundsViscosity: 1.0, worldCopyJump: false, intertia: false});
     map.fitBounds(AU_BOUNDS);
 
     const [states,regions]=await Promise.all([fetchJSON(STATES_URL),fetchJSON(REGIONS_URL)]);

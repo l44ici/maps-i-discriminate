@@ -29,7 +29,6 @@ final class Back2Maps {
       $atts = shortcode_atts([
         'height'     => '60vh',
         'title'      => 'Back2Maps',
-        'subtitle'   => 'Regional choropleth + markers from CSV/XLSX',
         'divzoom'    => '6',
         'markerzoom' => '',
       ], $atts, 'back2maps');
