@@ -1,145 +1,172 @@
-/* ===== Back2Maps — SPLC-style bubble heat map (robust CSV + UI shim) ===== */
+/* ===== Back2Maps — states by default, regions on zoom, CSV-driven bubbles ===== */
 (() => {
   "use strict";
 
-  /* ---- neutralize themes that call jQuery UI progressbar (prevents hard crash) */
+  // — prevent theme jQuery UI progressbar crashes
   (function () {
     if (window.jQuery && !jQuery.fn.progressbar) {
       jQuery.fn.progressbar = function () { return this; };
     }
   })();
 
-  const CFG = (typeof B2M === "object" && B2M) || {};
-  const ROOT_ID = "b2m-map";
-  const DIV_ZOOM = +(document.querySelector(".back2maps")?.dataset?.divzoom || CFG.minZoomForDiv || 6);
+  const CFG        = (typeof B2M === "object" && B2M) || {};
+  const ROOT_ID    = "b2m-map";
+  const WRAP       = document.querySelector(".back2maps");
+  const DIV_ZOOM   = +(WRAP?.dataset?.divzoom || CFG.minZoomForDiv || 6);
 
   const STATES_URL  = CFG.statesUrl    || "australian-states.min.geojson";
-  const REGIONS_URL = CFG.divisionsUrl || "regional_div.json";
+  const REGIONS_URL = CFG.divisionsUrl || "regional_div.geojson";
   const CSV_URL     = CFG.cioDataCsv   || "testData.csv";
-  const XLSX_URL    = CFG.cioDataXlsx  || "testData.xlsx"; // not used here but kept for parity
 
-  const AU_BOUNDS = [[-44.0, 112.0], [-10.0, 154.0]];
+  // AU view
+  const AU_BOUNDS = [[-44, 112], [-10, 154]];
+
+  // helpers
+  const LOG = (...a) => console.log("[B2M]", ...a);
+  const fetchJSON = (u) => fetch(u, { cache: "no-cache" }).then(r => r.ok ? r.json() : null).catch(() => null);
+  const fetchText = (u) => fetch(u, { cache: "no-cache" }).then(r => r.ok ? r.text() : "").catch(() => "");
+
   const STS = new Set(["NSW","ACT","VIC","QLD","SA","WA","TAS","NT"]);
-  const asState = s => { const x=(s??"").trim().toUpperCase(); return STS.has(x)?x:""; };
-  const LOG = (...a)=>console.log("[B2M]",...a);
+  const asState = (s) => { const x=(s??"").toString().trim().toUpperCase(); return STS.has(x)?x:""; };
 
-  const fetchJSON = (url) => fetch(url,{cache:"no-cache"}).then(r=>r.ok?r.json():null).catch(()=>null);
-  const fetchText = (url) => fetch(url,{cache:"no-cache"}).then(r=>r.ok?r.text():"").catch(()=> "");
+  // try to find a key in an object by exact or fuzzy terms
+  function keyLike(obj, needles) {
+    const keys = Object.keys(obj || {});
+    const lows = keys.map(k => k.toLowerCase());
+    const want = needles.map(n => n.toLowerCase());
+    for (let i = 0; i < lows.length; i++) {
+      const k = lows[i];
+      if (want.some(n => k === n || k.includes(n))) return keys[i];
+    }
+    return "";
+  }
 
-  /* ---- safe CSV parser: returns [] on empty/malformed input */
+  // safe CSV → array of objects
   function parseCSVSafe(txt) {
     if (!txt || typeof txt !== "string") return [];
-    // find the first non-empty line for header
     const lines = txt.split(/\r?\n/).filter(l => l.trim().length);
     if (!lines.length) return [];
     const header = lines.shift().split(",").map(h => h.trim());
-    if (!header.length) return [];
-    const rows = [];
+    const out = [];
     for (const line of lines) {
-      // minimal CSV: split on commas (your file doesn’t use quotes)
-      const cells = line.split(",").map(v => v.trim());
-      const obj = {};
-      for (let i=0;i<header.length;i++) obj[header[i]] = cells[i] ?? "";
-      rows.push(obj);
+      const cells = line.split(","); // your file isn’t quoted; simple split is fine
+      const o = {};
+      for (let i = 0; i < header.length; i++) o[header[i]] = (cells[i] ?? "").trim();
+      out.push(o);
     }
-    return rows;
+    return out;
   }
 
-  // Approx polygon centroid (outer ring only) — good enough for label placement
-  function centroidOfGeom(geom){
-    const avg = (ring) => {
-      let sx=0, sy=0, n=0;
-      for (const [x,y] of ring){ sx+=x; sy+=y; n++; }
-      return n ? [sy/n, sx/n] : null; // return [lat,lon]
-    };
+  // centroid (lat,lon) for label placement
+  function centroid(geom) {
     if (!geom) return null;
+    const avg = (ring) => {
+      let sx = 0, sy = 0, n = 0;
+      for (const [x, y] of ring) { sx += x; sy += y; n++; }
+      return n ? [sy / n, sx / n] : null; // [lat, lon]
+    };
     if (geom.type === "Polygon") return avg(geom.coordinates[0]);
     if (geom.type === "MultiPolygon") return avg(geom.coordinates[0][0]);
     return null;
   }
 
-  // Bubble style (SPLC-ish)
-  function bubbleStyle(count){
-    const r = Math.max(6, Math.sqrt(count) * 2.2); // readable minimum
-    return {
-      radius: r,
-      fillColor: "#d93b2b",
-      color: "#a11e14",
-      weight: 0.5,
-      fillOpacity: 0.7,
-      opacity: 0.35
-    };
+  // SPLC-style bubble visuals
+  function bubbleStyle(count) {
+    const r = Math.max(6, Math.sqrt(count) * 2.2); // keep small ones readable
+    return { radius:r, fillColor:"#d93b2b", color:"#a11e14", weight:0.5, fillOpacity:0.75, opacity:0.35 };
   }
-
-  function labelIcon(text){
+  function labelIcon(text) {
     return L.divIcon({
       html: `<div style="color:#fff;font-size:11px;font-weight:700;text-align:center;transform:translateY(-1px)">${text}</div>`,
       className: "b2m-bubble-label",
-      iconSize: [22,22]
+      iconSize: [24, 24]
     });
   }
 
-  async function buildMap(){
-    if (typeof L === "undefined") return console.error("[B2M] Leaflet not loaded.");
-    const map = L.map(ROOT_ID, { zoomControl:true, minZoom:3, maxZoom:10 });
+  // map state abbrev from region props
+  function propToStateAbbr(props = {}) {
+    const direct = props.ST || props.STATE_ABBR || props.state || props.State || props.st;
+    const ab = asState(direct);
+    if (ab) return ab;
+    const name = (props.STATE_NAME || props.STATE || props.Name || props.name || "").toString().trim().toUpperCase();
+    const MAP = {
+      "NEW SOUTH WALES":"NSW","VICTORIA":"VIC","QUEENSLAND":"QLD","SOUTH AUSTRALIA":"SA",
+      "WESTERN AUSTRALIA":"WA","TASMANIA":"TAS","NORTHERN TERRITORY":"NT","AUSTRALIAN CAPITAL TERRITORY":"ACT","ACT":"ACT"
+    };
+    return MAP[name] || "";
+  }
+
+  async function buildMap() {
+    if (typeof L === "undefined") return console.error("[B2M] Leaflet not loaded");
+    const map = L.map(ROOT_ID, { zoomControl:true, minZoom:3, maxZoom:12 });
     map.fitBounds(AU_BOUNDS);
 
-    // Load polygons first so we can at least render a base map even if CSV fails
-    const [states, regions] = await Promise.all([ fetchJSON(STATES_URL), fetchJSON(REGIONS_URL) ]);
+    // 1) base layers
+    const [statesFC, regionsFC] = await Promise.all([fetchJSON(STATES_URL), fetchJSON(REGIONS_URL)]);
 
-    if (states?.features) {
-      L.geoJSON(states, { style: { color:"#ffffff", weight:1, fillColor:"#f4ebdf", fillOpacity:1 } }).addTo(map);
+    // draw states in beige (visible at all zooms)
+    let stateLayer = null;
+    if (statesFC?.features) {
+      stateLayer = L.geoJSON(statesFC, {
+        style: { color:"#ffffff", weight:1, fillColor:"#f4ebdf", fillOpacity:1 }
+      }).addTo(map);
     }
-    if (!regions?.features?.length) {
-      console.warn("[B2M] Regions not loaded or empty.");
-      return;
-    }
-    const regionLayer = L.geoJSON(regions, { style:{ color:"#ffffff", weight:0.6, fillOpacity:0.05 } }).addTo(map);
 
-    // Load CSV safely (never crash if empty/404)
+    // draw regions faint (we’ll toggle with zoom)
+    let regionLayer = null;
+    if (regionsFC?.features?.length) {
+      regionLayer = L.geoJSON(regionsFC, {
+        style: { color:"#ffffff", weight:0.8, fillOpacity:0.05 }
+      });
+    }
+
+    // 2) data → counts (robust header pick)
     let rows = [];
     try {
-      const txt = await fetchText(CSV_URL);
-      rows = parseCSVSafe(txt);
-    } catch (e) {
-      console.warn("[B2M] CSV load/parse failed:", e);
-      rows = [];
-    }
-    LOG("Rows parsed:", rows.length);
+      rows = parseCSVSafe(await fetchText(CSV_URL));
+    } catch { rows = []; }
 
-    // Count by state (you can later switch to division if you have postcode->division)
+    // find the column that holds state codes/names
+    let stateKey = "";
+    if (rows[0]) {
+      stateKey = keyLike(rows[0], ["State / Territory", "State", "Incident State", "Territory", "st", "state"]);
+    }
     const countsByState = new Map();
-    for (const o of rows) {
-      const st = asState(o.State || o["State / Territory"] || o.state);
+    for (const r of rows) {
+      const st = asState(r[stateKey]);
       if (!st) continue;
       countsByState.set(st, (countsByState.get(st) || 0) + 1);
     }
 
-    // Build simple state lookup on the region feature (common props: ST/state)
-    const bubbles = [];
-    for (const f of regions.features) {
-      const p = f.properties || {};
-      const st = asState(p.state || p.ST || p.st || p.STATE || p.STATE_ABBR);
-      const count = countsByState.get(st) || 0;
-      if (!count) continue;
-      const c = centroidOfGeom(f.geometry);
-      if (!c) continue;
-      const [lat, lon] = c;
-      const m = L.circleMarker([lat,lon], bubbleStyle(count)).addTo(map);
-      m.bindTooltip(`${p.name || p.id || st}: ${count} report(s)`, { sticky:true });
-      L.marker([lat,lon], { icon: labelIcon(count) }).addTo(map);
-      bubbles.push(m);
+    // 3) bubbles layer (per STATE centroid) — always shown
+    const stateBubbles = [];
+    if (statesFC?.features?.length) {
+      for (const f of statesFC.features) {
+        const st = propToStateAbbr(f.properties || {});
+        const count = countsByState.get(st) || 0;
+        if (!count) continue;
+        const c = centroid(f.geometry);
+        if (!c) continue;
+        const [lat, lon] = c;
+        const circle = L.circleMarker([lat, lon], bubbleStyle(count)).addTo(map);
+        L.marker([lat, lon], { icon: labelIcon(count) }).addTo(map);
+        circle.bindTooltip(`${f.properties.STATE_NAME || st}: ${count} report(s)`, { sticky:true });
+        stateBubbles.push(circle);
+      }
     }
 
-    // Show bubbles only when zoomed in enough (like your old div zoom)
-    const toggle = () => {
-      const on = map.getZoom() >= DIV_ZOOM;
-      for (const m of bubbles) on ? m.addTo(map) : map.removeLayer(m);
-    };
-    map.on("zoomend", toggle);
-    toggle();
+    // 4) toggle regions layer with zoom (states remain visible)
+    if (regionLayer) {
+      const syncRegions = () => {
+        const on = map.getZoom() >= DIV_ZOOM;
+        if (on && !map.hasLayer(regionLayer)) map.addLayer(regionLayer);
+        if (!on && map.hasLayer(regionLayer)) map.removeLayer(regionLayer);
+      };
+      map.on("zoomend", syncRegions);
+      syncRegions();
+    }
 
-    LOG("Map ready. Regions:", regions.features.length, "Bubbles:", bubbles.length);
+    LOG("Rows:", rows.length, "States with bubbles:", stateBubbles.length, "Regions:", regionsFC?.features?.length || 0);
   }
 
   document.addEventListener("DOMContentLoaded", buildMap);
