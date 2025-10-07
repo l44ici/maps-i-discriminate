@@ -11,23 +11,23 @@
 
   // ------- config from PHP / shortcode -------
   const CFG = (typeof B2M === "object" && B2M) || {};
-  const ROOT_ID = "b2m-map"; // matches shortcode output
+  const ROOT_ID = "b2m-map";
   const WRAP = document.querySelector(".back2maps");
   const DIV_ZOOM = +(WRAP?.dataset?.divzoom || CFG.minZoomForDiv || 6);
 
   // URLs from PHP
-  const REGIONS_URL = CFG.divisionsUrl || "regional_div.json";
-  const REGIONS_OBJ = CFG.divObject || "regional_div"; // for TopoJSON
+  const REGIONS_URL = CFG.divisionsUrl || "regional_div.geojson";
+  const REGIONS_OBJ = CFG.divObject || "regional_div"; // used only for TopoJSON
   const STATES_URL  = CFG.statesUrl    || "australian-states.min.geojson";
-  const SUBURBS_URL = CFG.suburbLookup || "suburbs.json";
-  const CSV_URL     = CFG.cioDataCsv   || "testData.csv";
+  const SUBURBS_URL = CFG.suburbLookup || "suburbs";               // your file: /plugins/maps-i-discriminate/suburbs
+  const CSV_URL     = CFG.cioDataCsv   || "testData.csv";          // data without lat/lon is OK
   const XLSX_URL    = CFG.cioDataXlsx  || "testData.xlsx";
-  const PCINDEX_URL = CFG.pcIndexUrl   || ""; // optional; we’ll build one if missing
+  const PCINDEX_URL = CFG.pcIndexUrl   || "";                      // optional
 
   // Australia bounds
   const AU_BOUNDS = [[-44.0, 112.0], [-10.0, 154.0]];
 
-  // ---- diagnostics helpers ----
+  // ---- helpers ----
   const LOG = (...a) => console.log("[B2M]", ...a);
   function banner(msg, color = "#b91c1c") {
     try {
@@ -41,24 +41,22 @@
     } catch (_) {}
   }
 
-  // ------- small helpers -------
   const norm = (s) => (s ?? "").toString().trim();
   const STS = new Set(["NSW", "ACT", "VIC", "QLD", "SA", "WA", "TAS", "NT"]);
   const asState = (s) => { const x = norm(s).toUpperCase(); return STS.has(x) ? x : ""; };
   const asPostcode = (s) => { const x = norm(s).replace(/\s+/g, ""); return /^\d{4}$/.test(x) ? x : ""; };
 
-  const fetchText = (url) => fetch(url, { cache: "no-cache" }).then((r) => (r.ok ? r.text() : ""));
-  const fetchJSON = (url) => fetch(url, { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-  const fetchexists = (url) => url ? fetch(url, { method: "HEAD", cache: "no-cache" }).then((r) => r.ok) : Promise.resolve(false);
+  const fetchText  = (url) => fetch(url, { cache: "no-cache" }).then(r => (r.ok ? r.text() : ""));
+  const fetchJSON  = (url) => fetch(url, { cache: "no-cache" }).then(r => (r.ok ? r.json() : null)).catch(() => null);
+  const fetchexists= (url) => url ? fetch(url, { method: "HEAD", cache: "no-cache" }).then(r => r.ok) : Promise.resolve(false);
 
-  // CSV parser
+  // Tiny CSV parser (kept to avoid Papa dependency/order issues)
   function parseCSV(text) {
-    const out = []; let i=0, cell="", row=[], q=false;
+    const out=[]; let i=0, cell="", row=[], q=false;
     const pushCell=()=>{row.push(cell);cell="";};
     const pushRow =()=>{row.push(cell);out.push(row);row=[];cell="";};
     while (i<text.length){
-      const c=text[i++];
-      if (q){ if (c==='"'){ if (text[i]==='"'){cell+='"';i++;} else q=false; } else cell+=c; continue; }
+      const c=text[i++]; if (q){ if (c==='"'){ if (text[i]==='"'){cell+='"';i++;} else q=false; } else cell+=c; continue; }
       if (c==='"'){ q=true; continue; }
       if (c===','){ pushCell(); continue; }
       if (c==='\n'){ pushRow(); continue; }
@@ -85,7 +83,7 @@
     };
     if (!geom) return false;
     if (geom.type==="Polygon") return testPoly(geom.coordinates);
-    if (geom.type==="MultiPolygon") return geom.coordinates.some(testPoly);
+    if (geom.type==="MultiPolygon") return geom.coordinates.some(p => testPoly(p));
     return false;
   }
 
@@ -104,9 +102,8 @@
   // ------- global state -------
   let stateLayer, regionLayer;
   let statesFC=null, regionsFC=null;
-  let suburbIdx=null;        // [{state, suburb, postcode, lat, lon}, ...]
-  let pcIndex = null;        // external postcode-index.json (optional)
-  let pcIndexDyn = null;     // built from suburbs.json + regions (runtime)
+  let suburbIdx=null;      // [{state, suburb, postcode, lat, lon}, ...]
+  let pcIndex=null, pcIndexDyn=null;
 
   // public counters
   window.B2M_countsDivision = window.B2M_countsDivision || new Map();
@@ -114,24 +111,15 @@
   const bumpDiv = (id) => { if (!id) return; window.B2M_countsDivision.set(id, (window.B2M_countsDivision.get(id)||0)+1); };
   const bumpSt  = (st) => { if (!st) return; window.B2M_countsState.set(st, (window.B2M_countsState.get(st)||0)+1); };
 
-  // robust header resolver (handles truncated “State / Terr”)
+  // header resolver
   const keyLike = (obj, needles) => {
-    const keys = Object.keys(obj);
-    const low  = keys.map(k => k.toLowerCase());
+    const keys = Object.keys(obj), low  = keys.map(k => k.toLowerCase());
     needles = needles.map(n => n.toLowerCase());
-    for (let i=0;i<low.length;i++){
-      const k = low[i];
-      if (needles.some(n => k===n || k.includes(n))) return keys[i];
-    }
+    for (let i=0;i<low.length;i++){ const k = low[i]; if (needles.some(n => k===n || k.includes(n))) return keys[i]; }
     return "";
   };
-  const getDyn = (o, exact, fuzzy=[]) => {
-    for (const k of exact) if (o[k] !== undefined) return o[k];
-    const k = keyLike(o, fuzzy);
-    return k ? o[k] : "";
-  };
+  const getDyn = (o, exact, fuzzy=[]) => { for (const k of exact) if (o[k] !== undefined) return o[k]; const k = keyLike(o, fuzzy); return k ? o[k] : ""; };
 
-  // suburb lookup (loose)
   const clean = s => norm(s).toLowerCase().replace(/[^a-z0-9]/g,"");
   const eqLoose = (a,b) => { const x=clean(a), y=clean(b); return x && y && (x===y || x.startsWith(y) || y.startsWith(x)); };
 
@@ -144,14 +132,12 @@
     return hit ? {lat:+hit.lat, lon:+hit.lon} : null;
   }
 
-  // postcode → division
   function postcodeToDivision(pc){
     if (pcIndex && pcIndex[pc]) return pcIndex[pc];
     if (pcIndexDyn && pcIndexDyn[pc]) return pcIndexDyn[pc];
     return null;
   }
 
-  // lat/lon → division via polygons
   function latLonToDivision(lat, lon){
     if (!regionsFC || !Array.isArray(regionsFC.features)) return null;
     const pt=[lon,lat];
@@ -164,7 +150,6 @@
     return null;
   }
 
-  // load CSV/XLSX
   async function loadIncidentRows(){
     const csvText = await fetchText(CSV_URL);
     if (csvText && csvText.trim()) return rowsToObjects(parseCSV(csvText));
@@ -177,7 +162,6 @@
     }
     return [];
   }
-
   function rowsToObjects(rows){
     if (!rows || !rows.length) return [];
     const hdr = rows[0].map(h => norm(h));
@@ -190,64 +174,56 @@
     return out;
   }
 
-  // Build postcode→division map from suburbs.json (centroids pip into regions)
+  // Build postcode→division map from suburbs (centroids pip into regions)
   function buildPcIndexFromSuburbs(){
     if (!regionsFC || !Array.isArray(suburbIdx)) return {};
     const idx = {};
-    let added=0, tested=0;
     for (const r of suburbIdx){
       const pc = asPostcode(r.postcode);
       if (!pc || idx[pc]) continue;
       const lat=+r.lat, lon=+r.lon;
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
-      tested++;
       const div = latLonToDivision(lat, lon);
-      if (div){ idx[pc]=div; added++; }
+      if (div) idx[pc]=div;
     }
-    LOG(`Built dynamic postcode index: ${added} mapped (tested ${tested})`);
     return idx;
   }
 
-  // count rows
   async function countFromData(objs){
     window.B2M_countsDivision.clear();
     window.B2M_countsState.clear();
 
-    let cPc=0, cLL=0, cGaz=0, cState=0;
-
     for (const o of objs){
-      const suburb = norm(getDyn(o, ["Suburb","suburb","Town","City","Locality"], ["suburb","town","city","locality"]));
-      const state  = asState(getDyn(o, ["State / Territory","State","state","Territory","State / Terr"], ["state","territ"]));
-      const pc     = asPostcode(getDyn(o, ["Post Code","postcode","Postcode","Zip","PC"], ["post","zip"]));
+      const suburb = norm(getDyn(o, ["Suburb","Town","City","Locality","suburb","city"], ["suburb","town","city","locality"]));
+      const state  = asState(getDyn(o, ["State / Territory","State / Terr","State","state","Territory"], ["state","territ"]));
+      const pc     = asPostcode(getDyn(o, ["Post Code","Postcode","postcode","Zip","PC"], ["post","zip"]));
       const lat    = +getDyn(o, ["Lat","Latitude","lat","latitude"], ["lat"]);
       const lon    = +getDyn(o, ["Lon","Lng","Longitude","lon","lng","longitude"], ["lon","lng"]);
 
-      // 1) postcode index
+      // (1) postcode index → division
       if (pc){
         const divId = postcodeToDivision(pc);
-        if (divId){ bumpDiv(divId); cPc++; continue; }
+        if (divId){ bumpDiv(divId); continue; }
       }
-      // 2) direct coords
+      // (2) direct coords → division
       if (Number.isFinite(lat) && Number.isFinite(lon)){
         const divId = latLonToDivision(lat, lon);
-        if (divId){ bumpDiv(divId); cLL++; continue; }
-        if (state){ bumpSt(state); cState++; continue; }
+        if (divId){ bumpDiv(divId); continue; }
+        if (state){ bumpSt(state); continue; }
         continue;
       }
-      // 3) gazetteer suburb+state -> coords -> division
+      // (3) suburb+state → centroid → division
       if (suburb && state){
         const pos = suburbToLatLon(state, suburb, pc);
         if (pos){
           const divId = latLonToDivision(pos.lat, pos.lon);
-          if (divId){ bumpDiv(divId); cGaz++; continue; }
-          bumpSt(state); cState++; continue;
+          if (divId){ bumpDiv(divId); continue; }
+          bumpSt(state); continue;
         }
       }
-      // 4) state-only fallback
-      if (state){ bumpSt(state); cState++; continue; }
+      // (4) state-only
+      if (state){ bumpSt(state); continue; }
     }
-
-    LOG(`Counts by method — postcode:${cPc}, lat/lon:${cLL}, gazetteer:${cGaz}, stateOnly:${cState}, total:${objs.length}`);
   }
 
   function applyCountsToRegions(){
@@ -256,8 +232,8 @@
       const p = (l.feature && l.feature.properties) || {};
       const id = p._b2m_id || p.id || p.code || p.name;
       const n  = window.B2M_countsDivision.get(id) || 0;
-      const title = p.name || id || "(unknown)";
       const st = p.state || p.ST || p.st || "—";
+      const title = p.name || id || "(unknown)";
       const html = `<strong>${title}</strong><br>State: ${st}<br>${n} report(s)`;
       if (l.getPopup && l.getPopup()) l.setPopupContent(html); else l.bindPopup(html);
     });
@@ -265,8 +241,7 @@
 
   function propToStateAbbr(props = {}){
     const direct = props.ST || props.STATE_ABBR || props.state_abbrev || props.State || props.state || "";
-    const ab = asState(direct);
-    if (ab) return ab;
+    const ab = asState(direct); if (ab) return ab;
     const name = (props.STATE_NAME || props.STATE || props.Name || props.name || "").toString().trim().toUpperCase();
     const MAP = {
       "NEW SOUTH WALES":"NSW","VICTORIA":"VIC","QUEENSLAND":"QLD","SOUTH AUSTRALIA":"SA",
@@ -287,7 +262,7 @@
   }
 
   const styleState  = () => ({ weight: 2.5, color: "#475569", fillColor: "#e5e7eb", fillOpacity: 0.25 });
-  const styleRegion = () => ({ weight: 1, color: "#475569", fillColor: "#cbd5e1", fillOpacity: 0.04 });
+  const styleRegion = () => ({ weight: 1,   color: "#475569", fillColor: "#cbd5e1", fillOpacity: 0.04 });
 
   function ensureRootElement(){
     let root = document.getElementById(ROOT_ID) || document.querySelector(".b2m-map");
@@ -328,6 +303,7 @@
     if (regions){
       if (regions.type === "Topology") regionsFC = topoToGeo(regions, REGIONS_OBJ);
       else if (regions.type === "FeatureCollection") regionsFC = regions;
+      else if (regions.type === "Feature") regionsFC = { type:"FeatureCollection", features:[regions] };
     }
     if (regionsFC && Array.isArray(regionsFC.features)){
       regionsFC.features.forEach((f, i) => {
@@ -340,22 +316,15 @@
     suburbIdx = Array.isArray(suburbs) ? suburbs : null;
     pcIndex   = (pcidx && typeof pcidx === "object") ? pcidx : null;
 
-    LOG("URLs:", { STATES_URL, REGIONS_URL, CSV_URL });
-    LOG("States FC:", statesFC ? "ok" : "missing");
-    LOG("Regions FC:", regionsFC ? `ok (features=${regionsFC.features?.length || 0})` : "missing");
-    LOG("Suburb gazetteer:", suburbIdx ? `ok (${suburbIdx.length} rows)` : "missing");
-    LOG("External PC index:", pcIndex ? "ok" : "missing");
-
     if (!statesFC) banner("States file missing/invalid");
     if (!regionsFC || !Array.isArray(regionsFC.features) || !regionsFC.features.length)
       banner("Regional divisions file invalid or empty");
 
-    // If we have no external postcode index, try building one dynamically
+    // Build dynamic postcode index if needed
     if (!pcIndex && suburbIdx && regionsFC){
       pcIndexDyn = buildPcIndexFromSuburbs();
-      const sz = pcIndexDyn ? Object.keys(pcIndexDyn).length : 0;
-      if (sz === 0) banner("Could not build postcode index from suburbs.json — divisions will stay at 0 unless CSV has lat/lon.", "#92400e");
-      else LOG(`Dynamic postcode index size: ${sz}`);
+      if (!pcIndexDyn || !Object.keys(pcIndexDyn).length)
+        banner("Could not build postcode index from suburbs.json — divisions will be zero unless CSV has lat/lon.", "#92400e");
     }
 
     // ---- Layers ----
@@ -393,18 +362,10 @@
       B2M_map.on("zoomend", toggleRegions);
     }
 
-    // ---- Load and count data ----
+    // ---- Load & count data ----
     try {
       const rows = await loadIncidentRows();
-      LOG("CSV/XLSX rows:", Array.isArray(rows) ? rows.length : 0);
       if (!rows || !rows.length) banner("No rows loaded from CSV/XLSX");
-
-      // If we still have no postcode index AND no lat/lon AND no suburbs.json,
-      // we cannot assign to divisions — warn loudly so it’s clear.
-      if (!pcIndex && !pcIndexDyn && !suburbIdx){
-        banner("No postcode index and no suburbs.json — division counts impossible. Counting to states only.", "#6b21a8");
-      }
-
       await countFromData(rows);
       applyCountsToRegions();
       applyCountsToStates();
