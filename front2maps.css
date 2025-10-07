@@ -1,46 +1,50 @@
-/* ——— Make the map full-bleed, larger, and remove all borders/rounding ——— */
+/* ——— Hero-style, 3/4-page Back2Maps layout ——— */
 
-/* kill the white card frame/padding around the map */
+/* remove card and keep transparency */
 .back2maps .b2m-card {
   background: transparent;
   border: 0;
   box-shadow: none;
   padding: 0;
+  margin: 0;
   border-radius: 0;
 }
 
-/* optional: hide title/sub/note if you want a clean “poster map” */
+/* hide optional captions for a clean hero map */
 .back2maps .b2m-title,
 .back2maps .b2m-sub,
 .back2maps .b2m-note {
   display: none;
 }
 
-/* map element itself: big & edge-to-edge */
+/* make the map fill ~75% of the screen */
 #b2m-map {
-  width: 100%;
-  height: 78vh;          /* larger like the US map */
-  max-height: 980px;     /* cap on very large screens */
-  background: transparent;   /* blend with site bg */
-  border: 0;
+  width: 75vw;          /* 75% of viewport width */
+  height: 75vh;         /* 75% of viewport height */
+  max-width: 1200px;    /* optional limit for huge screens */
+  max-height: 900px;
+  background: transparent;
+  border: none;
   border-radius: 0;
+  margin: 0 auto;       /* center horizontally */
+  display: block;
   position: relative;
   overflow: hidden;
 }
 
-/* make Leaflet canvas blend in and remove any residual radius */
+/* keep Leaflet container fully transparent */
 #b2m-map .leaflet-container {
   background: transparent !important;
   border-radius: 0 !important;
 }
 
-/* soft shadow + “lift” for 3D-like look without losing transparency */
+/* 3D depth with soft map shadow */
 #b2m-map .leaflet-overlay-pane svg {
   filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.1))
           drop-shadow(0 8px 20px rgba(0, 0, 0, 0.08));
 }
 
-/* keep region fills blending smoothly */
+/* smooth region blending */
 #b2m-map .b2m-region {
   mix-blend-mode: multiply;
   transition: filter 0.2s ease;
@@ -49,21 +53,20 @@
   filter: brightness(1.08);
 }
 
-/* --- Circles (data bubbles) --- */
+/* circles (bubbles) with drop shadow and ambient glow */
 #b2m-map .b2m-dot {
   stroke: #7a1a12;
   stroke-width: 0.8;
-  /* soft, subtle lift shadow for every bubble */
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.25))
           drop-shadow(0 3px 6px rgba(0, 0, 0, 0.15));
   transition: transform 0.15s ease, filter 0.2s ease;
 }
 #b2m-map .b2m-dot:hover {
-  transform: scale(1.15); /* gentle hover lift */
+  transform: scale(1.15);
   filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.25));
 }
 
-/* --- Ambient cluster glow for dense areas --- */
+/* warm ambient glow for clustered dots */
 #b2m-map .b2m-dot::after {
   content: "";
   position: absolute;
@@ -82,23 +85,16 @@
   pointer-events: none;
 }
 
-/* optional halo for subtle glow around dots (base level) */
-#b2m-map .b2m-dot-halo {
-  filter: blur(2px);
-  opacity: 0.3;
-  mix-blend-mode: multiply;
-}
-
-/* keep zoom buttons tucked in */
+/* zoom buttons tidy */
 #b2m-map .leaflet-control-zoom {
   top: 14px;
   left: 14px;
 }
 
-/* a little more room on mobile */
+/* responsive: smaller height for phones */
 @media (max-width: 768px) {
   #b2m-map {
-    height: 65vh;
-    max-height: 680px;
+    width: 95vw;
+    height: 60vh;
   }
 }
