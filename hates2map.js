@@ -17,7 +17,7 @@
   const STATES_URL  = CFG.statesUrl    || "australian-states.min.geojson";
   const REGIONS_URL = CFG.divisionsUrl || "regional_div.geojson";
   const CSV_URL     = CFG.cioDataCsv   || "testData.csv";
-  const SUBURBS_URL = CFG.suburbLookup || ""; // should be admin-ajax.php?action=b2m_suburbs
+  const SUBURBS_URL = CFG.suburbLookup || "suburbs.json";
 
   const AU_BOUNDS   = [[-44, 112], [-10, 154]];
   const LOG = (...a)=>console.log("[B2M]",...a);
