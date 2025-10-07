@@ -100,7 +100,7 @@ final class Back2Maps {
     $states_url  = $base_url . 'australian-states.min.geojson';
 
     // Optional suburb/postcode centroid lookup
-    $suburbs_url = $base_url . 'suburbs.json';
+    $suburbs_url = $base_url . 'suburbs';
 
     // Incident data: CSV + optional XLSX fallback
     $csv_url  = $base_url . 'testData.csv';
