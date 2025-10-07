@@ -1,7 +1,8 @@
-/* ===== Back2Maps — one bubble per CSV row; uses suburbs.json lat/lng lookup ===== */
+/* ===== Back2Maps — one bubble per CSV row + regional choropleth (bubbles on top) ===== */
 (() => {
   "use strict";
 
+  // theme safety: neutralize missing jQuery UI progressbar
   (function () {
     if (window.jQuery && !jQuery.fn.progressbar) {
       jQuery.fn.progressbar = function () { return this; };
@@ -43,7 +44,7 @@
   }
 
   const styleStates  = { color:"#fff", weight:1, fillColor:"#f4ebdf", fillOpacity:1 };
-  const styleRegions = { color:"#fff", weight:0.8, fillOpacity:0.05 };
+  const styleRegionsFallback = { color:"#fff", weight:0.8, fillOpacity:0.20, fillColor:"#FDE68A" }; // visible tint if no counts yet
   const pointStyle   = { radius:4, fillColor:"#d93b2b", color:"#a11e14", weight:0.5, fillOpacity:0.75, opacity:0.35 };
 
   function buildSuburbIndexes(suburbs) {
@@ -53,7 +54,7 @@
       const pc  = asPostcode(String(r.postcode ?? ""));
       const st  = asState(r.state);
       const sub = clean(r.suburb);
-      const lat = +r.lat, lon = +(r.lon ?? r.lng);
+      const lat = +r.lat, lon = +(r.lng); // suburbs.json uses lat/lng
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
       if (pc && !byPC[pc]) byPC[pc] = [lat, lon];
       if (st && sub && !bySubState[`${st}|${sub}`]) bySubState[`${st}|${sub}`] = [lat, lon];
@@ -71,6 +72,73 @@
     return null;
   }
 
+  // ---------- choropleth helpers ----------
+  // stamp a guaranteed region id (_b2m_id) so we don’t depend on unknown property keys
+  function ensureRegionIds(regionsFC){
+    if (!regionsFC?.features) return;
+    let i = 0;
+    for (const f of regionsFC.features){
+      if (!f.properties) f.properties = {};
+      const p = f.properties;
+      p._b2m_id = p._b2m_id || p.SA4_NAME || p.SA3_NAME || p.REGION_NAME || p.RegionName || p.region_name || p.code || p.id || p.name || `region_${++i}`;
+    }
+  }
+
+  // point-in-polygon for GeoJSON [lon,lat] coordinates
+  function pointInPolygon(pt, geom) {
+    const [x, y] = pt;
+    const test = (poly) => {
+      let inside = false;
+      for (const ring of poly) {
+        for (let i=0, j=ring.length-1; i<ring.length; j=i++) {
+          const [xi, yi] = ring[i], [xj, yj] = ring[j];
+          const inter = (yi>y)!==(yj>y) && x < (xj-xi)*(y-yi)/((yj-yi)||1e-12)+xi;
+          if (inter) inside = !inside;
+        }
+      }
+      return inside;
+    };
+    if (!geom) return false;
+    if (geom.type==="Polygon") return test(geom.coordinates);
+    if (geom.type==="MultiPolygon") return geom.coordinates.some(test);
+    return false;
+  }
+  function latLonToDivision(lat, lon, regionsFC){
+    if (!regionsFC?.features?.length) return null;
+    const pt=[lon,lat]; // GeoJSON expects [lon,lat]
+    for (const f of regionsFC.features){
+      if (pointInPolygon(pt, f.geometry)) return f.properties?._b2m_id : null;
+    }
+    return null;
+  }
+
+  // counts + palette
+  const DIV_COUNTS = new Map();
+  let BREAKS = [];
+  const PALETTE = ["#FEF3C7","#FDE68A","#F59E0B","#EA580C","#B91C1C"]; // yellow → orange → red
+
+  function computeQuantileBreaks(values, k=5){
+    if (!values.length) return [];
+    const v = values.slice().sort((a,b)=>a-b);
+    const q = [];
+    for (let i=1;i<k;i++){
+      const idx = Math.floor((i/k) * (v.length-1));
+      q.push(v[idx]);
+    }
+    return q; // k-1 thresholds
+  }
+  function colorForCount(n){
+    if (!n) return "#ffffff";
+    let i=0;
+    while (i<BREAKS.length && n>BREAKS[i]) i++;
+    return PALETTE[i];
+  }
+  function regionStyleWithCounts(feat){
+    const id = feat.properties?._b2m_id : null;
+    const n  = (id && DIV_COUNTS.get(id)) || 0;
+    return { color:"#fff", weight:0.8, fillOpacity:0.65, fillColor: colorForCount(n) };
+  }
+
   async function buildMap() {
     if (typeof L === "undefined") return console.error("[B2M] Leaflet not loaded");
 
@@ -80,9 +148,11 @@
     const [statesFC, regionsFC] = await Promise.all([ fetchJSON(STATES_URL), fetchJSON(REGIONS_URL) ]);
     if (statesFC?.features) L.geoJSON(statesFC, { style: styleStates }).addTo(map);
 
+    // ensure region ids and build initial layer (tinted so you “see” the layer before counts)
+    ensureRegionIds(regionsFC);
     let regionLayer = null;
     if (regionsFC?.features?.length) {
-      regionLayer = L.geoJSON(regionsFC, { style: styleRegions });
+      regionLayer = L.geoJSON(regionsFC, { style: styleRegionsFallback }).addTo(map);
       const toggle = () => {
         const on = map.getZoom() >= DIV_ZOOM;
         if (on && !map.hasLayer(regionLayer)) map.addLayer(regionLayer);
@@ -107,7 +177,6 @@
     const idx = buildSuburbIndexes(suburbs);
     const rows = parseCSVSafe(await fetchText(CSV_URL));
     LOG("Rows parsed:", rows.length);
-
     if (!rows.length) return;
 
     const sample = rows[0];
@@ -117,18 +186,43 @@
       pc:     Object.keys(sample).find(k => /post.?code|zip/i.test(k)) || ""
     };
 
+    // put markers on their own layer so they’re always on top
+    const bubbleLayer = L.layerGroup().addTo(map);
+
     let plotted = 0;
     for (const r of rows) {
       const ll = rowToLatLon(r, keys, idx);
       if (!ll) continue;
       const [lat, lon] = ll;
-      const m = L.circleMarker([lat, lon], pointStyle).addTo(map);
+
+      const m = L.circleMarker([lat, lon], pointStyle);
       const label = [r[keys.suburb], r[keys.state], r[keys.pc]].filter(Boolean).join(", ");
       m.bindTooltip(label, { sticky:true });
+      m.addTo(bubbleLayer);
       plotted++;
+
+      // tally region count for choropleth
+      if (regionsFC) {
+        const id = latLonToDivision(lat, lon, regionsFC);
+        if (id) DIV_COUNTS.set(id, (DIV_COUNTS.get(id) || 0) + 1);
+      }
     }
 
-    LOG("Plotted row-bubbles:", plotted);
+    // compute breaks + recolor regions
+    if (regionLayer) {
+      const vals = Array.from(DIV_COUNTS.values()).filter(n => n > 0);
+      if (vals.length) {
+        BREAKS = computeQuantileBreaks(vals, PALETTE.length);
+        regionLayer.setStyle(regionStyleWithCounts);
+        LOG("Choropleth breaks:", BREAKS);
+      } else {
+        console.warn("[B2M] No divisions received counts — check that regional_div.geojson overlaps Australia & has valid polygons.");
+      }
+    }
+
+    // make sure bubbles stay on top
+    bubbleLayer.bringToFront();
+    LOG("Plotted row-bubbles:", plotted, "Divisions counted:", DIV_COUNTS.size);
   }
 
   document.addEventListener("DOMContentLoaded", buildMap);
