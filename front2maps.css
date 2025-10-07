@@ -1,27 +1,42 @@
-/* --- HATE MAP Hero Title --- */
-.b2m-hero {
-  text-align: center;
-  margin-top: 2rem;
-  margin-bottom: 1.5rem;
+/* ——— Make the map full-bleed, larger, and remove all borders/rounding ——— */
+
+/* kill the white card frame/padding around the map */
+.back2maps .b2m-card{
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  border-radius: 0;
 }
 
-.b2m-hero h1 {
-  font-family: 'Montserrat', 'Helvetica Neue', Arial, sans-serif;
-  font-size: clamp(3rem, 7vw, 5rem); /* responsive scaling */
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: #111; /* strong dark tone */
-  margin: 0;
-  line-height: 1.1;
+/* optional: hide title/sub/note if you want a clean “poster map” */
+.back2maps .b2m-title,
+.back2maps .b2m-sub,
+.back2maps .b2m-note{ display:none; }
+
+/* map element itself: big & edge-to-edge */
+#b2m-map{
+  width: 100%;
+  height: 78vh;          /* bigger like the US map */
+  max-height: 980px;     /* cap on huge screens—adjust as you like */
+  background: transparent;      /* blend with site bg */
+  border: 0;
+  border-radius: 0;
 }
 
-.b2m-hero p {
-  font-family: 'Georgia', 'Times New Roman', serif;
-  font-size: clamp(1rem, 2.3vw, 1.3rem);
-  font-style: italic;
-  color: #444;
-  opacity: 0.85;
-  margin-top: 0.4rem;
-  margin-bottom: 0.5rem;
+/* make Leaflet canvas blend in and remove any residual radius */
+#b2m-map .leaflet-container{
+  background: transparent !important;
+  border-radius: 0 !important;
+}
+
+/* keep zoom buttons tucked in */
+#b2m-map .leaflet-control-zoom{
+  top: 14px;
+  left: 14px;
+}
+
+/* a little more room on mobile */
+@media (max-width: 768px){
+  #b2m-map{ height: 65vh; max-height: 680px; }
 }
