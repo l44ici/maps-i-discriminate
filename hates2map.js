@@ -124,72 +124,81 @@
   let statesFC = null;
   let regionsFC = null;
   let suburbIdx = null;
-  let pcIndex = null;
+  let pcIndex = null;        // optional external index
+  let pcIndexDyn = null;     // index built at runtime from suburbs.json
 
   // public counters
   window.B2M_countsDivision = window.B2M_countsDivision || new Map();
   window.B2M_countsState = window.B2M_countsState || new Map();
-  const bumpDiv = (id) => {
-    if (!id) return;
-    window.B2M_countsDivision.set(id, (window.B2M_countsDivision.get(id) || 0) + 1);
-  };
-  const bumpSt = (st) => {
-    if (!st) return;
-    window.B2M_countsState.set(st, (window.B2M_countsState.get(st) || 0) + 1);
+  const bumpDiv = (id) => { if (id) window.B2M_countsDivision.set(id, (window.B2M_countsDivision.get(id) || 0) + 1); };
+  const bumpSt  = (st) => { if (st) window.B2M_countsState.set(st, (window.B2M_countsState.get(st) || 0) + 1); };
+
+  // --- header + value helpers (robust to truncated headers) ---
+  const hasKeyLike = (obj, needles) => {
+    const ks = Object.keys(obj).map(k => k.toLowerCase());
+    const nd = needles.map(n => n.toLowerCase());
+    for (let i=0;i<ks.length;i++) {
+      const k = ks[i];
+      if (nd.some(n => k === n || k.includes(n))) return Object.keys(obj)[i];
+    }
+    return "";
   };
 
+  function getDyn(obj, exactList, fuzzyList) {
+    for (const n of exactList) if (obj[n] !== undefined) return obj[n];
+    const k = hasKeyLike(obj, fuzzyList || []);
+    return k ? obj[k] : "";
+  }
+
+  // loose suburb equality (handles truncation/punctuation)
+  const clean = s => norm(s).toLowerCase().replace(/[^a-z0-9]/g, "");
+  const eqLoose = (a,b) => {
+    const x = clean(a), y = clean(b);
+    if (!x || !y) return false;
+    return x === y || x.startsWith(y) || y.startsWith(x);
+  };
+
+  // postcode → division resolver
   function postcodeToDivision(pc) {
     if (pcIndex && pcIndex[pc]) return pcIndex[pc];
+    if (pcIndexDyn && pcIndexDyn[pc]) return pcIndexDyn[pc];
     return null;
   }
 
+  // suburb/state(/pc) → lat/lon via gazetteer (loose match)
   function suburbToLatLon(state, suburb, pc) {
     if (!Array.isArray(suburbIdx)) return null;
-    const st = asState(state), sub = norm(suburb).toLowerCase(), p = asPostcode(pc);
-    const hit = suburbIdx.find(
-      (r) =>
-        asState(r.state) === st &&
-        norm(r.suburb).toLowerCase() === sub &&
-        (!p || asPostcode(r.postcode) === p)
+    const st = asState(state), p = asPostcode(pc);
+    const hit = suburbIdx.find(r =>
+      asState(r.state) === st &&
+      eqLoose(r.suburb, suburb) &&
+      (!p || asPostcode(r.postcode) === p)
     );
-    return hit ? { lat: +hit.lat, lon: +hit.lon } : null;
+    return hit ? { lat:+hit.lat, lon:+hit.lon } : null;
   }
 
-  // ✅ state-properties → standardized abbreviation used by counters
+  // normalize state props to our abbrev keys
   function propToStateAbbr(props = {}) {
     const direct = props.ST || props.STATE_ABBR || props.state_abbrev || props.State || props.state || "";
     const ab = asState(direct);
     if (ab) return ab;
-
-    const name = (props.STATE_NAME || props.STATE || props.Name || props.name || "")
-      .toString()
-      .trim()
-      .toUpperCase();
-
+    const name = (props.STATE_NAME || props.STATE || props.Name || props.name || "").toString().trim().toUpperCase();
     const MAP = {
-      "NEW SOUTH WALES": "NSW",
-      "VICTORIA": "VIC",
-      "QUEENSLAND": "QLD",
-      "SOUTH AUSTRALIA": "SA",
-      "WESTERN AUSTRALIA": "WA",
-      "TASMANIA": "TAS",
-      "NORTHERN TERRITORY": "NT",
-      "AUSTRALIAN CAPITAL TERRITORY": "ACT",
-      "ACT": "ACT"
+      "NEW SOUTH WALES":"NSW","VICTORIA":"VIC","QUEENSLAND":"QLD","SOUTH AUSTRALIA":"SA",
+      "WESTERN AUSTRALIA":"WA","TASMANIA":"TAS","NORTHERN TERRITORY":"NT","AUSTRALIAN CAPITAL TERRITORY":"ACT","ACT":"ACT"
     };
     return MAP[name] || "";
   }
 
+  // point -> divisionId via polygons
   function latLonToDivision(lat, lon) {
     if (!regionsFC || !Array.isArray(regionsFC.features)) return null;
-    const pt = [lon, lat];
+    const pt=[lon,lat];
     for (const f of regionsFC.features) {
-      const g = f.geometry;
-      if (!g) continue;
+      const g=f.geometry; if (!g) continue;
       const id = f.properties?._b2m_id || f.properties?.id || f.properties?.code || f.properties?.name || null;
-      if (g.type === "Polygon" && pointInPolygon(pt, g)) return id;
-      if (g.type === "MultiPolygon" && g.coordinates.some((poly) => pointInPolygon(pt, { type: "Polygon", coordinates: poly })))
-        return id;
+      if (g.type==="Polygon"      && pointInPolygon(pt,g)) return id;
+      if (g.type==="MultiPolygon" && g.coordinates.some(poly => pointInPolygon(pt,{type:"Polygon",coordinates:poly}))) return id;
     }
     return null;
   }
@@ -229,17 +238,12 @@
     let matchedDivs = 0;
     let matchedStates = 0;
 
-    const get = (o, names) => {
-      for (const n of names) if (o[n] !== undefined) return o[n];
-      return "";
-    };
-
     for (const o of objs) {
-      const suburb = norm(get(o, ["Suburb", "suburb", "Town", "City", "Locality"]));
-      const state  = asState(get(o, ["State / Territory", "State", "state", "Territory"]));
-      const pc     = asPostcode(get(o, ["Post Code", "postcode", "Postcode", "Zip", "PC"]));
-      const lat    = +get(o, ["Lat", "Latitude", "lat", "latitude"]);
-      const lon    = +get(o, ["Lon", "Lng", "Longitude", "lon", "lng", "longitude"]);
+      const suburb = norm(getDyn(o, ["Suburb","suburb","Town","City","Locality"], ["suburb","town","city","locality"]));
+      const state  = asState(getDyn(o, ["State / Territory","State","state","Territory","State / Terr"], ["state","territ"]));
+      const pc     = asPostcode(getDyn(o, ["Post Code","postcode","Postcode","Zip","PC"], ["post","zip"]));
+      const lat    = +getDyn(o, ["Lat","Latitude","lat","latitude"], ["lat"]);
+      const lon    = +getDyn(o, ["Lon","Lng","Longitude","lon","lng","longitude"], ["lon","lng"]);
 
       // 1. postcode → division
       if (pc) {
@@ -286,7 +290,6 @@
     });
   }
 
-  // ✅ use normalized state code so popups reflect the counters
   function applyCountsToStates() {
     if (!stateLayer) return;
     stateLayer.eachLayer((l) => {
@@ -298,7 +301,7 @@
     });
   }
 
-  const styleState = () => ({ weight: 2.5, color: "#475569", fillColor: "#e5e7eb", fillOpacity: 0.25 });
+  const styleState  = () => ({ weight: 2.5, color: "#475569", fillColor: "#e5e7eb", fillOpacity: 0.25 });
   const styleRegion = () => ({ weight: 1, color: "#475569", fillColor: "#cbd5e1", fillOpacity: 0.04 });
 
   function ensureRootElement() {
@@ -313,6 +316,21 @@
     parent.appendChild(root);
     console.warn("[Back2Maps] Root container was missing — created one automatically.");
     return root;
+  }
+
+  // Build postcode→division map from suburbs.json (centroids pip into regions)
+  function buildPcIndexFromSuburbs() {
+    if (!regionsFC || !Array.isArray(suburbIdx)) return {};
+    const idx = {};
+    for (const r of suburbIdx) {
+      const pc = asPostcode(r.postcode);
+      if (!pc || idx[pc]) continue;
+      const lat = +r.lat, lon = +r.lon;
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      const div = latLonToDivision(lat, lon);
+      if (div) idx[pc] = div;
+    }
+    return idx;
   }
 
   async function buildMap() {
@@ -343,7 +361,7 @@
       else if (regions.type === "FeatureCollection") regionsFC = regions;
     }
 
-    // ✅ Ensure every region has an ID + readable name
+    // Ensure every region has an ID + readable name
     if (regionsFC && Array.isArray(regionsFC.features)) {
       regionsFC.features.forEach((f, i) => {
         const p = f.properties || (f.properties = {});
@@ -353,7 +371,10 @@
     }
 
     suburbIdx = Array.isArray(suburbs) ? suburbs : null;
-    pcIndex = pcidx && typeof pcidx === "object" ? pcidx : null;
+    pcIndex   = (pcidx && typeof pcidx === "object") ? pcidx : null;
+
+    // Build dynamic postcode index if we have suburbs+regions
+    pcIndexDyn = (regionsFC && suburbIdx) ? buildPcIndexFromSuburbs() : null;
 
     LOG("URLs:", { STATES_URL, REGIONS_URL, CSV_URL });
     LOG("States FC:", statesFC ? "ok" : "missing");
@@ -369,7 +390,7 @@
         onEachFeature: (feat, layer) => {
           const p = feat.properties || {};
           const name = p.STATE_NAME || p.STATE || p.Name || p.name || "State";
-          const abbr = propToStateAbbr(p);                 // <-- normalized
+          const abbr = propToStateAbbr(p);
           const n = (abbr && window.B2M_countsState.get(abbr)) || 0;
           layer.bindPopup(`<strong>${name}</strong><br>${n} report(s)`);
           layer.on({
