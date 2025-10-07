@@ -14,6 +14,13 @@ final class Back2Maps {
 
   private function __construct() {
     add_action('init',               [$this, 'register_shortcode']);
+    // Prevent jQuery progressbar errors globally
+    add_action('wp_enqueue_scripts', function() {
+      wp_add_inline_script('jquery-core', 
+        'try{if(window.jQuery&&!jQuery.fn.progressbar){jQuery.fn.progressbar=function(){return this;}}}catch(e){}', 
+        'before'
+      );
+    });
     add_action('wp_enqueue_scripts', [$this, 'enqueue_assets']);
   }
 
