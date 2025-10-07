@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Back2Maps
  * Description: Leaflet map with state vs regional-division choropleth and CSV/XLSX-driven markers.
- * Version: 1.5.0
+ * Version: 1.5.1
  * Author: You
  */
 
@@ -19,20 +19,18 @@ final class Back2Maps {
 
   public function register_shortcode() {
     add_shortcode('back2maps', function($atts){
-      // Allow easy control from the shortcode:
       // [back2maps height="60vh" divzoom="6" markerzoom="6" title="Back2Maps" subtitle="Regional choropleth + markers from CSV/XLSX"]
       $atts = shortcode_atts([
         'height'     => '60vh',
         'title'      => 'Back2Maps',
         'subtitle'   => 'Regional choropleth + markers from CSV/XLSX',
-        'divzoom'    => '6',   // divisions appear from this zoom
-        'markerzoom' => '',    // defaults to divzoom if empty
+        'divzoom'    => '6',
+        'markerzoom' => '',
       ], $atts, 'back2maps');
 
       $divzoom    = is_numeric($atts['divzoom']) ? $atts['divzoom'] : '6';
       $markerzoom = ($atts['markerzoom'] === '' ? $divzoom : $atts['markerzoom']);
 
-      // Stash zoom prefs in a data attribute so JS can read even if localization is cached
       ob_start(); ?>
       <div class="back2maps" data-divzoom="<?php echo esc_attr($divzoom); ?>" data-markerzoom="<?php echo esc_attr($markerzoom); ?>">
         <div class="b2m-card">
@@ -50,78 +48,66 @@ final class Back2Maps {
   private function path($rel) { return plugin_dir_path(__FILE__) . ltrim($rel, '/'); }
 
   public function enqueue_assets() {
-    // ---- CSS
+    // CSS
     wp_enqueue_style('leaflet', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', [], '1.9.4');
-    wp_enqueue_style('back2maps-css', $this->url('front2maps.css'), [], '1.5.0');
+    wp_enqueue_style('back2maps-css', $this->url('front2maps.css'), [], '1.5.1');
 
-    // ---- JS libraries
+    // JS libs
     wp_enqueue_script('leaflet',  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', [], '1.9.4', true);
     wp_enqueue_script('papaparse','https://unpkg.com/papaparse@5.4.1/papaparse.min.js', [], '5.4.1', true);
     wp_enqueue_script('turf',     'https://unpkg.com/@turf/turf@6.5.0/turf.min.js', [], '6.5.0', true);
     wp_enqueue_script('topojson', 'https://unpkg.com/topojson-client@3/dist/topojson-client.min.js', [], '3.1.0', true);
-    // XLSX support (optional; used only if CSV is missing/empty)
     wp_enqueue_script('xlsx',     'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js', [], '0.18.5', true);
 
-    // ---- Main JS
+    // Main JS (keep your current filename)
     wp_enqueue_script(
       'back2maps-js',
       $this->url('hates2map.js'),
       ['leaflet','papaparse','turf','topojson','xlsx'],
-      '1.5.0',
+      '1.5.1',
       true
     );
 
-    // ---- Your files live in the plugin ROOT (per your screenshot)
     $base_url = plugin_dir_url(__FILE__);
     $base_dir = plugin_dir_path(__FILE__);
 
-    // ✅ Regional divisions: auto-detect TopoJSON (.json) OR GeoJSON (.geojson)
+    // Regional divisions: prefer your actual files
     $divisions_url = '';
-    $div_object    = 'regional_div'; // only used if it's a TopoJSON
+    $div_object    = 'regional_div'; // only for TopoJSON
 
-    foreach ([
-      'regional_div.json',          // TopoJSON or GeoJSON
-      'regional_div.geojson',       // GeoJSON
-      'regional_divisions.geojson', // Alternate
-      'regional_divisions.json'     // Alternate
-    ] as $fname) {
-      if (file_exists($base_dir . $fname)) {
-        $divisions_url = $base_url . $fname;
-        break;
-      }
+    foreach (['regional_div.geojson','regional_div.json','regional_divisions.geojson','regional_divisions.json'] as $fname) {
+      if (file_exists($base_dir . $fname)) { $divisions_url = $base_url . $fname; break; }
     }
+    if (!$divisions_url) { $divisions_url = $base_url . 'regional_div.geojson'; }
 
-    // Fallback if still nothing matched
-    if (!$divisions_url) {
-      $divisions_url = $base_url . 'regional_div.json';
-    }
-
-    // States GeoJSON (used for zoomed-out layer)
+    // States
     $states_url  = $base_url . 'australian-states.min.geojson';
 
-    // Optional suburb/postcode centroid lookup
+    // Suburb gazetteer: your file is named "suburbs" (no extension)
     $suburbs_url = $base_url . 'suburbs';
 
-    // Incident data: CSV + optional XLSX fallback
+    // Optional postcode index (leave blank if you don't have it)
+    $pcindex_url = file_exists($base_dir.'postcode-index.json') ? $base_url.'postcode-index.json' : '';
+
+    // Data
     $csv_url  = $base_url . 'testData.csv';
     $xlsx_url = $base_url . 'testData.xlsx';
 
-    // Zoom thresholds (JS can override)
+    // Defaults (JS can override via data-* on the container)
     $default_div_zoom     = 6;
     $default_marker_zoom  = 6;
 
     wp_localize_script('back2maps-js', 'B2M', [
-      // Polygons
-      'divisionsUrl'  => esc_url_raw($divisions_url),
-      'divObject'     => $div_object,                 // ignored for GeoJSON
-      'statesUrl'     => esc_url_raw($states_url),
+      'divisionsUrl'      => esc_url_raw($divisions_url),
+      'divObject'         => $div_object,
+      'statesUrl'         => esc_url_raw($states_url),
 
-      // Lookup + data
-      'suburbLookup'  => esc_url_raw($suburbs_url),
-      'cioDataCsv'    => esc_url_raw($csv_url),
-      'cioDataXlsx'   => esc_url_raw($xlsx_url),
+      'suburbLookup'      => esc_url_raw($suburbs_url),
+      'pcIndexUrl'        => esc_url_raw($pcindex_url),
 
-      // Zoom toggles (JS can override with data attributes)
+      'cioDataCsv'        => esc_url_raw($csv_url),
+      'cioDataXlsx'       => esc_url_raw($xlsx_url),
+
       'minZoomForDiv'     => $default_div_zoom,
       'minZoomForMarkers' => $default_marker_zoom,
     ]);
