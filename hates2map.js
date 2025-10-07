@@ -37,7 +37,15 @@
 
   const styleStates={color:"#fff",weight:1,fillColor:"#f4ebdf",fillOpacity:1};
   const styleRegionsInit={color:"#fff",weight:0.8,fillOpacity:0.2,fillColor:"#FDE68A"};
-  const pointStyle={radius:4,fillColor:"#d93b2b",color:"#a11e14",weight:0.5,fillOpacity:0.75,opacity:0.35};
+  // AFTER (slightly larger + a touch stronger outline)
+  const pointStyle = {
+    radius: 6,           // ← bigger bubbles
+    fillColor: "#d93b2b",
+    color: "#a11e14",
+    weight: 0.7,         // optional: slightly stronger edge for clarity
+    fillOpacity: 0.80,   // optional: a hair more solid
+    opacity: 0.35
+  };
 
   function buildSuburbIndexes(suburbs){
     const byPC={},bySubState={};
@@ -138,9 +146,7 @@
       const ll=rowToLatLon(r,keys,idx);
       if(!ll)continue;
       const [lat,lon]=ll;
-      L.circleMarker([lat,lon],pointStyle)
-        .bindTooltip([r[keys.suburb],r[keys.state],r[keys.pc]].filter(Boolean).join(", "),{sticky:true})
-        .addTo(bubbles);
+      L.circleMarker([lat, lon], pointStyle).addTo(bubbleLayer);
       plotted++;
 
       for(const f of regions.features){
