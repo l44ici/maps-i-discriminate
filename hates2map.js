@@ -61,43 +61,20 @@
   // CSV parser
   function parseCSV(text) {
     const out = [];
-    let i = 0,
-      cell = "",
-      row = [],
-      q = false;
-    const pushCell = () => {
-      row.push(cell);
-      cell = "";
-    };
-    const pushRow = () => {
-      row.push(cell);
-      out.push(row);
-      row = [];
-      cell = "";
-    };
+    let i = 0, cell = "", row = [], q = false;
+    const pushCell = () => { row.push(cell); cell = ""; };
+    const pushRow  = () => { row.push(cell); out.push(row); row = []; cell = ""; };
     while (i < text.length) {
       const c = text[i++];
       if (q) {
         if (c === '"') {
-          if (text[i] === '"') {
-            cell += '"';
-            i++;
-          } else q = false;
+          if (text[i] === '"') { cell += '"'; i++; } else q = false;
         } else cell += c;
         continue;
       }
-      if (c === '"') {
-        q = true;
-        continue;
-      }
-      if (c === ",") {
-        pushCell();
-        continue;
-      }
-      if (c === "\n") {
-        pushRow();
-        continue;
-      }
+      if (c === '"') { q = true; continue; }
+      if (c === ",") { pushCell(); continue; }
+      if (c === "\n") { pushRow(); continue; }
       if (c === "\r") continue;
       cell += c;
     }
@@ -107,16 +84,12 @@
 
   // point-in-polygon
   function pointInPolygon(pt, geom) {
-    const x = pt[0],
-      y = pt[1];
+    const x = pt[0], y = pt[1];
     const testPoly = (poly) => {
       let inside = false;
       for (const ring of poly) {
         for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-          const xi = ring[i][0],
-            yi = ring[i][1],
-            xj = ring[j][0],
-            yj = ring[j][1];
+          const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
           const inter = (yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / ((yj - yi) || 1e-12) + xi;
           if (inter) inside = !inside;
         }
@@ -172,9 +145,7 @@
 
   function suburbToLatLon(state, suburb, pc) {
     if (!Array.isArray(suburbIdx)) return null;
-    const st = asState(state),
-      sub = norm(suburb).toLowerCase(),
-      p = asPostcode(pc);
+    const st = asState(state), sub = norm(suburb).toLowerCase(), p = asPostcode(pc);
     const hit = suburbIdx.find(
       (r) =>
         asState(r.state) === st &&
@@ -190,12 +161,10 @@
     for (const f of regionsFC.features) {
       const g = f.geometry;
       if (!g) continue;
-      if (g.type === "Polygon" && pointInPolygon(pt, g)) {
-        return (f.properties && (f.properties.id || f.properties.code || f.properties.name)) || null;
-      }
-      if (g.type === "MultiPolygon" && g.coordinates.some((poly) => pointInPolygon(pt, { type: "Polygon", coordinates: poly }))) {
-        return (f.properties && (f.properties.id || f.properties.code || f.properties.name)) || null;
-      }
+      const id = f.properties?._b2m_id || f.properties?.id || f.properties?.code || f.properties?.name || null;
+      if (g.type === "Polygon" && pointInPolygon(pt, g)) return id;
+      if (g.type === "MultiPolygon" && g.coordinates.some((poly) => pointInPolygon(pt, { type: "Polygon", coordinates: poly })))
+        return id;
     }
     return null;
   }
@@ -244,39 +213,23 @@
 
       if (pc) {
         const divId = postcodeToDivision(pc);
-        if (divId) {
-          bumpDiv(divId);
-          continue;
-        }
+        if (divId) { bumpDiv(divId); continue; }
       }
       if (Number.isFinite(lat) && Number.isFinite(lon)) {
         const divId = latLonToDivision(lat, lon);
-        if (divId) {
-          bumpDiv(divId);
-          continue;
-        }
-        if (state) {
-          bumpSt(state);
-          continue;
-        }
+        if (divId) { bumpDiv(divId); continue; }
+        if (state) { bumpSt(state); continue; }
         continue;
       }
       if (suburb && state) {
         const pos = suburbToLatLon(state, suburb, pc);
         if (pos) {
           const divId = latLonToDivision(pos.lat, pos.lon);
-          if (divId) {
-            bumpDiv(divId);
-            continue;
-          }
-          bumpSt(state);
-          continue;
+          if (divId) { bumpDiv(divId); continue; }
+          bumpSt(state); continue;
         }
       }
-      if (state) {
-        bumpSt(state);
-        continue;
-      }
+      if (state) { bumpSt(state); continue; }
     }
   }
 
@@ -284,7 +237,7 @@
     if (!regionLayer) return;
     regionLayer.eachLayer((l) => {
       const p = (l.feature && l.feature.properties) || {};
-      const id = p.id || p.code || p.name;
+      const id = p._b2m_id || p.id || p.code || p.name;
       const n = window.B2M_countsDivision.get(id) || 0;
       const title = p.name || id || "(unknown)";
       const st = p.state || p.ST || p.st || "—";
@@ -350,6 +303,15 @@
       else if (regions.type === "FeatureCollection") regionsFC = regions;
     }
 
+    // ✅ Ensure every region has an ID + readable name
+    if (regionsFC && Array.isArray(regionsFC.features)) {
+      regionsFC.features.forEach((f, i) => {
+        const p = f.properties || (f.properties = {});
+        p._b2m_id = p.id || p.code || p.name || `R${i + 1}`;
+        if (!p.name) p.name = `Region ${i + 1}`;
+      });
+    }
+
     suburbIdx = Array.isArray(suburbs) ? suburbs : null;
     pcIndex = pcidx && typeof pcidx === "object" ? pcidx : null;
 
@@ -383,7 +345,7 @@
         style: styleRegion,
         onEachFeature: (feat, layer) => {
           const p = feat.properties || {};
-          const id = p.id || p.code || p.name;
+          const id = p._b2m_id || p.id || p.code || p.name;
           const n = window.B2M_countsDivision.get(id) || 0;
           const st = p.state || p.ST || p.st || "—";
           layer.bindPopup(`<strong>${p.name || id || "(unknown)"}<\/strong><br>State: ${st}<br>${n} report(s)`);
