@@ -75,25 +75,38 @@ final class Back2Maps {
     $base_url = plugin_dir_url(__FILE__);
     $base_dir = plugin_dir_path(__FILE__);
 
-    // Regional divisions: prefer your TopoJSON; fall back to .geojson if you ever add it
-    $divisions_url = $base_url . 'regional_div.json';
-    $div_object    = 'regional_div'; // <-- must match the TopoJSON "objects" key in regional_div.json
-    if (!file_exists($base_dir . 'regional_div.json') && file_exists($base_dir . 'regional_divisions.geojson')) {
-      $divisions_url = $base_url . 'regional_divisions.geojson';
-      $div_object    = ''; // ignored for GeoJSON
+    // ✅ Regional divisions: auto-detect TopoJSON (.json) OR GeoJSON (.geojson)
+    $divisions_url = '';
+    $div_object    = 'regional_div'; // only used if it's a TopoJSON
+
+    foreach ([
+      'regional_div.json',          // TopoJSON or GeoJSON
+      'regional_div.geojson',       // GeoJSON
+      'regional_divisions.geojson', // Alternate
+      'regional_divisions.json'     // Alternate
+    ] as $fname) {
+      if (file_exists($base_dir . $fname)) {
+        $divisions_url = $base_url . $fname;
+        break;
+      }
     }
 
-    // States GeoJSON (used for zoomed-out layer and as PIP fallback)
+    // Fallback if still nothing matched
+    if (!$divisions_url) {
+      $divisions_url = $base_url . 'regional_div.json';
+    }
+
+    // States GeoJSON (used for zoomed-out layer)
     $states_url  = $base_url . 'australian-states.min.geojson';
 
-    // Optional suburb/postcode centroid lookup (Point FeatureCollection)
+    // Optional suburb/postcode centroid lookup
     $suburbs_url = $base_url . 'suburbs.json';
 
-    // Incidents data: CSV primary, XLSX fallback
+    // Incident data: CSV + optional XLSX fallback
     $csv_url  = $base_url . 'testData.csv';
     $xlsx_url = $base_url . 'testData.xlsx';
 
-    // Defaults for zoom thresholds (JS will also read data-* from the container)
+    // Zoom thresholds (JS can override)
     $default_div_zoom     = 6;
     $default_marker_zoom  = 6;
 
