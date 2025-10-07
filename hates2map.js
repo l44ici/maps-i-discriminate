@@ -1,4 +1,4 @@
-/* ===== Back2Maps — one bubble per CSV row; uses suburbs.json lat/lng lookup ===== */
+/* ===== Back2Maps — per-row bubbles + regional choropleth ===== */
 (() => {
   "use strict";
 
@@ -43,8 +43,44 @@
   }
 
   const styleStates  = { color:"#fff", weight:1, fillColor:"#f4ebdf", fillOpacity:1 };
-  const styleRegions = { color:"#fff", weight:0.8, fillOpacity:0.05 };
   const pointStyle   = { radius:4, fillColor:"#d93b2b", color:"#a11e14", weight:0.5, fillOpacity:0.75, opacity:0.35 };
+
+  // Choropleth data
+  const DIV_COUNTS = new Map();
+  let MAX_DIV_COUNT = 0;
+
+  // --- Point-in-polygon test ---
+  function pointInPolygon(pt, geom) {
+    const [x, y] = pt;
+    const test = (poly) => {
+      let inside = false;
+      for (const ring of poly) {
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+          const [xi, yi] = ring[i], [xj, yj] = ring[j];
+          const inter = (yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / ((yj - yi) || 1e-12) + xi;
+          if (inter) inside = !inside;
+        }
+      }
+      return inside;
+    };
+    if (!geom) return false;
+    if (geom.type === "Polygon") return test(geom.coordinates);
+    if (geom.type === "MultiPolygon") return geom.coordinates.some(test);
+    return false;
+  }
+
+  function divisionIdFromProps(p = {}) {
+    return p.id || p.code || p.name || p._b2m_id;
+  }
+
+  function latLonToDivision(lat, lon, regionsFC) {
+    if (!regionsFC?.features?.length) return null;
+    const pt = [lon, lat];
+    for (const f of regionsFC.features) {
+      if (pointInPolygon(pt, f.geometry)) return divisionIdFromProps(f.properties || {});
+    }
+    return null;
+  }
 
   function buildSuburbIndexes(suburbs) {
     const byPC = Object.create(null), bySubState = Object.create(null);
@@ -71,6 +107,19 @@
     return null;
   }
 
+  // Choropleth color ramp
+  const RAMP = ["#fff5f0","#fcbba1","#fc9272","#fb6a4a","#de2d26","#a50f15"];
+  function colorForCount(n) {
+    if (!n || MAX_DIV_COUNT === 0) return "#ffffff";
+    const idx = Math.min(RAMP.length - 1, Math.floor((n / MAX_DIV_COUNT) * (RAMP.length - 1)));
+    return RAMP[idx];
+  }
+  function regionStyleWithCounts(feat) {
+    const id = divisionIdFromProps(feat.properties || {});
+    const n  = DIV_COUNTS.get(id) || 0;
+    return { color:"#fff", weight:0.8, fillOpacity:0.65, fillColor: colorForCount(n) };
+  }
+
   async function buildMap() {
     if (typeof L === "undefined") return console.error("[B2M] Leaflet not loaded");
 
@@ -82,7 +131,7 @@
 
     let regionLayer = null;
     if (regionsFC?.features?.length) {
-      regionLayer = L.geoJSON(regionsFC, { style: styleRegions });
+      regionLayer = L.geoJSON(regionsFC, { style: regionStyleWithCounts });
       const toggle = () => {
         const on = map.getZoom() >= DIV_ZOOM;
         if (on && !map.hasLayer(regionLayer)) map.addLayer(regionLayer);
@@ -122,13 +171,27 @@
       const ll = rowToLatLon(r, keys, idx);
       if (!ll) continue;
       const [lat, lon] = ll;
+
+      // plot bubble
       const m = L.circleMarker([lat, lon], pointStyle).addTo(map);
       const label = [r[keys.suburb], r[keys.state], r[keys.pc]].filter(Boolean).join(", ");
       m.bindTooltip(label, { sticky:true });
       plotted++;
+
+      // update division counts
+      if (regionsFC) {
+        const divId = latLonToDivision(lat, lon, regionsFC);
+        if (divId) {
+          const v = (DIV_COUNTS.get(divId) || 0) + 1;
+          DIV_COUNTS.set(divId, v);
+          if (v > MAX_DIV_COUNT) MAX_DIV_COUNT = v;
+        }
+      }
     }
 
-    LOG("Plotted row-bubbles:", plotted);
+    // refresh choropleth colors
+    if (regionLayer) regionLayer.setStyle(regionStyleWithCounts);
+    LOG(`Plotted ${plotted} points across ${DIV_COUNTS.size} divisions.`);
   }
 
   document.addEventListener("DOMContentLoaded", buildMap);
