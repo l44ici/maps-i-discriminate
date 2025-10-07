@@ -143,6 +143,14 @@
         .addTo(bubbles);
       plotted++;
 
+      L.circleMarker([lat, lon], {
+        radius: pointStyle.radius + 4,
+        color: 'transparent',
+        fillColor: '#d93b2b',
+        fillOpacity: 0.18,
+        className: 'b2m-dot-halo'
+      }).addTo(bubbleLayer);
+
       for(const f of regions.features){
         if(pointInPoly([lon,lat],f.geometry)){
           const id=f.properties._b2m_id;

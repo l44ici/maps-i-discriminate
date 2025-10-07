@@ -1,7 +1,7 @@
 /* ——— Make the map full-bleed, larger, and remove all borders/rounding ——— */
 
 /* kill the white card frame/padding around the map */
-.back2maps .b2m-card{
+.back2maps .b2m-card {
   background: transparent;
   border: 0;
   box-shadow: none;
@@ -12,31 +12,66 @@
 /* optional: hide title/sub/note if you want a clean “poster map” */
 .back2maps .b2m-title,
 .back2maps .b2m-sub,
-.back2maps .b2m-note{ display:none; }
+.back2maps .b2m-note {
+  display: none;
+}
 
 /* map element itself: big & edge-to-edge */
-#b2m-map{
+#b2m-map {
   width: 100%;
-  height: 78vh;          /* bigger like the US map */
-  max-height: 980px;     /* cap on huge screens—adjust as you like */
-  background: transparent;      /* blend with site bg */
+  height: 78vh;          /* larger like the US map */
+  max-height: 980px;     /* cap on very large screens */
+  background: transparent;   /* blend with site bg */
   border: 0;
   border-radius: 0;
+  position: relative;
+  overflow: hidden;
 }
 
 /* make Leaflet canvas blend in and remove any residual radius */
-#b2m-map .leaflet-container{
+#b2m-map .leaflet-container {
   background: transparent !important;
   border-radius: 0 !important;
 }
 
+/* soft shadow + “lift” for 3D-like look without losing transparency */
+#b2m-map .leaflet-overlay-pane svg {
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.1))
+          drop-shadow(0 8px 20px rgba(0, 0, 0, 0.08));
+}
+
+/* keep region fills blending smoothly */
+#b2m-map .b2m-region {
+  mix-blend-mode: multiply;
+  transition: filter 0.2s ease;
+}
+#b2m-map .b2m-region:hover {
+  filter: brightness(1.08);
+}
+
+/* dot styling: slightly larger, with soft shadow */
+#b2m-map .b2m-dot {
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
+  stroke: #7a1a12;
+  stroke-width: 0.8;
+}
+
+/* optional halo for subtle glow around dots */
+#b2m-map .b2m-dot-halo {
+  filter: blur(1px);
+  mix-blend-mode: multiply;
+}
+
 /* keep zoom buttons tucked in */
-#b2m-map .leaflet-control-zoom{
+#b2m-map .leaflet-control-zoom {
   top: 14px;
   left: 14px;
 }
 
 /* a little more room on mobile */
-@media (max-width: 768px){
-  #b2m-map{ height: 65vh; max-height: 680px; }
+@media (max-width: 768px) {
+  #b2m-map {
+    height: 65vh;
+    max-height: 680px;
+  }
 }
