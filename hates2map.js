@@ -93,7 +93,12 @@
 
   // ---------- main ----------
   document.addEventListener("DOMContentLoaded", async () => {
+    
+  // 1) Count rows into divisions/states (no markers added)
+  B2M_countFromCSV('/wp-content/plugins/back2maps/testData.csv');
 
+  // 2) (Optional) If you have a region layer and want tooltips to reflect counts now:
+  B2M_applyCountsToRegions();
   /* === ADD-ONLY: Count CSV rows into regional divisions / states (no markers) === */
   (function () {
     if (window.B2M_countFromCSV) return; // prevent duplicate adds
