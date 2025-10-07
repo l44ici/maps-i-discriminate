@@ -2,6 +2,13 @@
 (() => {
   "use strict";
 
+  // --- SAFE GUARD: keep theme errors from stopping our JS (progressbar missing) ---
+  (function(){
+    if (window.jQuery && !jQuery.fn.progressbar) {
+      jQuery.fn.progressbar = function(){ return this; }; // no-op shim
+    }
+  })();
+
   // ------- config from PHP -------
   const CFG = (typeof B2M === "object" && B2M) || {};
   const ROOT_ID     = CFG.rootId      || "back2maps-root";
@@ -191,8 +198,6 @@
       const n  = window.B2M_countsDivision.get(id) || 0;
       p.report_count = n;
 
-      // if you already bind popups elsewhere, skip rebinding.
-      // We keep a minimal default so you see numbers without touching your theme.
       const title = (p.name || id || '(unknown)');
       const st    = p.state || p.ST || p.st || '—';
       const html  = `<strong>${title}</strong><br>State: ${st}<br>${n} report(s)`;
@@ -205,9 +210,36 @@
   function styleState () { return {weight:2, color:'#64748b', fillColor:'#f8fafc', fillOpacity:0.18}; }
   function styleRegion() { return {weight:1, color:'#475569', fillColor:'#cbd5e1', fillOpacity:0.04}; }
 
+  // Find or create the root container so we never fail with "Root container not found"
+  function ensureRootElement() {
+    let root = document.getElementById(ROOT_ID) || document.querySelector('.b2m-map');
+    if (root) return root;
+
+    // Try to append into a sensible parent on this theme
+    const parent =
+      document.querySelector('.back2maps') ||
+      document.querySelector('.entry-content, main, #content, body');
+
+    root = document.createElement('div');
+    root.id = ROOT_ID;
+    root.className = 'b2m-map';
+    root.style.minHeight = '420px';
+    root.style.borderRadius = '12px';
+    parent.appendChild(root);
+    console.warn('[Back2Maps] Root container was missing — created one automatically.');
+    return root;
+  }
+
   async function buildMap(){
-    const root = document.getElementById(ROOT_ID) || document.querySelector('.b2m-map');
-    if(!root){ console.warn('[Back2Maps] Root container not found'); return; }
+    // Leaflet present?
+    if (typeof L === 'undefined') {
+      const cont = ensureRootElement();
+      cont.innerHTML = '<div style="padding:12px;color:#b91c1c">Leaflet library did not load. Check enqueue order.</div>';
+      console.error('[Back2Maps] Leaflet not found (L is undefined).');
+      return;
+    }
+
+    const root = ensureRootElement();
 
     map = L.map(root, { zoomControl:true, minZoom:3, maxZoom:12 });
     map.fitBounds(AU_BOUNDS);
