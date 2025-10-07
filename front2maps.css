@@ -1,9 +1,42 @@
-/* ===== Back2Maps — clean slate styles ===== */
-.back2maps { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-.b2m-card  { border:1px solid #e5e7eb; border-radius:12px; padding:16px; background:#fff; box-shadow:0 2px 8px rgba(0,0,0,.04); }
-.b2m-title { margin:0 0 6px; font-size:1.25rem; font-weight:800; }
-.b2m-sub   { margin:0 0 12px; color:#6b7280; }
-#b2m-map   { height:60vh; min-height:420px; border-radius:12px; overflow:hidden; border:1px solid #e5e7eb; }
-.b2m-note  { margin-top:8px; color:#6b7280; font-size:.95rem; }
-.leaflet-container { font: inherit;background: transparent }
-.leaflet-tooltip { border-radius:8px; padding:6px 8px; }
+/* ——— Make the map full-bleed, larger, and remove all borders/rounding ——— */
+
+/* kill the white card frame/padding around the map */
+.back2maps .b2m-card{
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+/* optional: hide title/sub/note if you want a clean “poster map” */
+.back2maps .b2m-title,
+.back2maps .b2m-sub,
+.back2maps .b2m-note{ display:none; }
+
+/* map element itself: big & edge-to-edge */
+#b2m-map{
+  width: 100%;
+  height: 78vh;          /* bigger like the US map */
+  max-height: 980px;     /* cap on huge screens—adjust as you like */
+  background: transparent;      /* blend with site bg */
+  border: 0;
+  border-radius: 0;
+}
+
+/* make Leaflet canvas blend in and remove any residual radius */
+#b2m-map .leaflet-container{
+  background: transparent !important;
+  border-radius: 0 !important;
+}
+
+/* keep zoom buttons tucked in */
+#b2m-map .leaflet-control-zoom{
+  top: 14px;
+  left: 14px;
+}
+
+/* a little more room on mobile */
+@media (max-width: 768px){
+  #b2m-map{ height: 65vh; max-height: 680px; }
+}
