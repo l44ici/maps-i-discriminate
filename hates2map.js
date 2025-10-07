@@ -28,7 +28,7 @@
   // normalisers
   const STS = new Set(["NSW","ACT","VIC","QLD","SA","WA","TAS","NT"]);
   const asState    = s => { const x=(s??"").toString().trim().toUpperCase(); return STS.has(x)?x:""; };
-  const asPostcode = s => { const x=(s??"").toString().replace(/\s+/g,""); return /^\d{4}$/.test(x)?x:""; };
+  const asPostcode = s => { const x=(s??"").toString().replace(/\s+/g,""); return /^\d{4}$/.test(x) ? x : ""; };
   const clean      = s => (s??"").toString().toLowerCase().replace(/[^a-z0-9]/g,"");
 
   // safe CSV
@@ -108,7 +108,7 @@
   // ---- choropleth (quantile breaks) ----
   const DIV_COUNTS = new Map();
   let BREAKS = []; // ascending thresholds
-  // palette: light yellow -> orange -> deep red
+  // palette: pale yellow -> mustard -> orange -> deep orange -> red
   const PALETTE = ["#FEF3C7","#FDE68A","#F59E0B","#EA580C","#B91C1C"]; // 5 bins
 
   function computeQuantileBreaks(values, k = 5){
@@ -123,7 +123,6 @@
   }
   function colorForCount(n){
     if (!n) return "#ffffff";
-    // find index in breaks
     let i = 0;
     while (i < BREAKS.length && n > BREAKS[i]) i++;
     return PALETTE[i]; // 0..k-1
