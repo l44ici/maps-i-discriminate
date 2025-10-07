@@ -1,8 +1,8 @@
-/* ===== Back2Maps — per-row bubbles + regional choropleth (red→orange→yellow) ===== */
+/* ===== Back2Maps — per-row bubbles + regional choropleth (lat/lng version) ===== */
 (() => {
   "use strict";
 
-  // prevent theme jQuery UI "progressbar" crashes
+  // prevent jQuery UI 'progressbar' errors
   (function () {
     if (window.jQuery && !jQuery.fn.progressbar) {
       jQuery.fn.progressbar = function () { return this; };
@@ -25,13 +25,13 @@
   const fetchJSON = (u) => fetch(u, { cache: "no-cache" }).then(r => r.ok ? r.json() : null).catch(() => null);
   const fetchText = (u) => fetch(u, { cache: "no-cache" }).then(r => r.ok ? r.text() : "").catch(() => "");
 
-  // ── normalisers ────────────────────────────────────────────────────────────────
+  // ── helpers ────────────────────────────────────────────────────────────────
   const STS = new Set(["NSW","ACT","VIC","QLD","SA","WA","TAS","NT"]);
   const asState    = s => { const x=(s??"").toString().trim().toUpperCase(); return STS.has(x)?x:""; };
   const asPostcode = s => { const x=(s??"").toString().replace(/\s+/g,""); return /^\d{4}$/.test(x)?x:""; };
   const clean      = s => (s??"").toString().toLowerCase().replace(/[^a-z0-9]/g,"");
 
-  // ── CSV (safe) ────────────────────────────────────────────────────────────────
+  // ── CSV parser ─────────────────────────────────────────────────────────────
   function parseCSVSafe(txt) {
     if (!txt || typeof txt !== "string") return [];
     const lines = txt.split(/\r?\n/).filter(l => l.trim().length);
@@ -47,11 +47,11 @@
     return out;
   }
 
-  // ── styles ────────────────────────────────────────────────────────────────────
+  // ── styles ─────────────────────────────────────────────────────────────────
   const styleStates  = { color:"#fff", weight:1, fillColor:"#f4ebdf", fillOpacity:1 };
   const pointStyle   = { radius:4, fillColor:"#d93b2b", color:"#a11e14", weight:0.5, fillOpacity:0.75, opacity:0.35 };
 
-  // ── suburb lookups (postcode & suburb+state → [lat,lon]) ─────────────────────
+  // ── suburb lookups ─────────────────────────────────────────────────────────
   function buildSuburbIndexes(suburbs) {
     const byPC = Object.create(null), bySubState = Object.create(null);
     if (!Array.isArray(suburbs)) return { byPC, bySubState };
@@ -59,7 +59,7 @@
       const pc  = asPostcode(String(r.postcode ?? ""));
       const st  = asState(r.state);
       const sub = clean(r.suburb);
-      const lat = +r.lat, lon = +(r.lon ?? r.lng);
+      const lat = +r.lat, lon = +r.lng; // ✅ use lat/lng only
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
       if (pc && !byPC[pc]) byPC[pc] = [lat, lon];
       if (st && sub && !bySubState[`${st}|${sub}`]) bySubState[`${st}|${sub}`] = [lat, lon];
@@ -76,7 +76,7 @@
     return null;
   }
 
-  // ── point-in-polygon & division id helpers ────────────────────────────────────
+  // ── geometry + region ID ───────────────────────────────────────────────────
   function pointInPolygon(pt, geom) {
     const [x, y] = pt;
     const test = (poly) => {
@@ -96,25 +96,23 @@
     return false;
   }
 
-  // Robust division-id picker: add any keys your GeoJSON actually uses here
   const divIdFromProps = (p={}) =>
     p.SA4_NAME || p.SA3_NAME || p.REGION_NAME || p.RegionName || p.region_name ||
     p.code || p.CODE || p.id || p.ID || p.name || p.NAME || p._b2m_id;
 
   function latLonToDivision(lat, lon, regionsFC) {
     if (!regionsFC?.features?.length) return null;
-    // GeoJSON coordinates are [lon,lat]
-    const pt = [lon, lat];
+    const pt = [lon, lat]; // GeoJSON expects [lon, lat]
     for (const f of regionsFC.features) {
       if (pointInPolygon(pt, f.geometry)) return divIdFromProps(f.properties || {});
     }
     return null;
   }
 
-  // ── choropleth (quantile bins) ────────────────────────────────────────────────
+  // ── choropleth logic ───────────────────────────────────────────────────────
   const DIV_COUNTS = new Map();
-  let BREAKS = [];                               // ascending thresholds
-  const PALETTE = ["#FEF3C7","#FDE68A","#F59E0B","#EA580C","#B91C1C"]; // yellow → orange → red
+  let BREAKS = [];
+  const PALETTE = ["#FEF3C7","#FDE68A","#F59E0B","#EA580C","#B91C1C"]; // yellow → red
 
   function computeQuantileBreaks(values, k = 5){
     if (!values.length) return [];
@@ -124,13 +122,13 @@
       const idx = Math.floor((i/k) * (v.length-1));
       q.push(v[idx]);
     }
-    return q; // length k-1
+    return q;
   }
   function colorForCount(n){
     if (!n) return "#ffffff";
     let i = 0;
     while (i < BREAKS.length && n > BREAKS[i]) i++;
-    return PALETTE[i]; // 0..k-1
+    return PALETTE[i];
   }
   function regionStyleWithCounts(feat){
     const id = divIdFromProps(feat.properties || {});
@@ -138,18 +136,16 @@
     return { color:"#fff", weight:0.8, fillOpacity:0.65, fillColor: colorForCount(n) };
   }
 
-  // ── build the map ─────────────────────────────────────────────────────────────
+  // ── main build ─────────────────────────────────────────────────────────────
   async function buildMap() {
     if (typeof L === "undefined") return console.error("[B2M] Leaflet not loaded");
 
     const map = L.map(ROOT_ID, { zoomControl:true, minZoom:3, maxZoom:12 });
     map.fitBounds(AU_BOUNDS);
 
-    // base polygons
     const [statesFC, regionsFC] = await Promise.all([ fetchJSON(STATES_URL), fetchJSON(REGIONS_URL) ]);
     if (statesFC?.features) L.geoJSON(statesFC, { style: styleStates }).addTo(map);
 
-    // regions layer (will recolor after counts are computed)
     let regionLayer = null;
     if (regionsFC?.features?.length) {
       regionLayer = L.geoJSON(regionsFC, { style: regionStyleWithCounts });
@@ -161,12 +157,11 @@
       map.on("zoomend", toggle); toggle();
     }
 
-    // suburbs gazetteer
     let suburbs = null;
     try {
       const txt = await fetchText(SUBURBS_URL);
       suburbs = JSON.parse(txt);
-      if (suburbs && Array.isArray(suburbs.data)) suburbs = suburbs.data; // your file shape
+      if (suburbs && Array.isArray(suburbs.data)) suburbs = suburbs.data;
     } catch { suburbs = null; }
 
     if (!Array.isArray(suburbs)) {
@@ -192,27 +187,24 @@
       if (!ll) continue;
       const [lat, lon] = ll;
 
-      // one bubble per row
       const m = L.circleMarker([lat, lon], pointStyle).addTo(map);
       const label = [r[keys.suburb], r[keys.state], r[keys.pc]].filter(Boolean).join(", ");
       m.bindTooltip(label, { sticky:true });
       plotted++;
 
-      // tally division for choropleth
       if (regionsFC) {
         const id = latLonToDivision(lat, lon, regionsFC);
         if (id) DIV_COUNTS.set(id, (DIV_COUNTS.get(id) || 0) + 1);
       }
     }
 
-    // color the regions
     if (regionLayer) {
       const vals = Array.from(DIV_COUNTS.values()).filter(n => n > 0);
       if (!vals.length) {
-        console.warn("[B2M] No region counts matched — check region properties. Using light tint so the layer is visible.");
+        console.warn("[B2M] No region counts matched — check region property names.");
         regionLayer.setStyle(() => ({ color:"#fff", weight:0.8, fillOpacity:0.65, fillColor:"#FDE68A" }));
       } else {
-        BREAKS = computeQuantileBreaks(vals, PALETTE.length); // 5 classes
+        BREAKS = computeQuantileBreaks(vals, PALETTE.length);
         regionLayer.setStyle(regionStyleWithCounts);
         LOG("Choropleth breaks:", BREAKS);
       }
