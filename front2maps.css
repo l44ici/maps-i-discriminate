@@ -63,7 +63,26 @@
   filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.25));
 }
 
-/* optional halo for subtle glow around dots */
+/* --- Ambient cluster glow for dense areas --- */
+#b2m-map .b2m-dot::after {
+  content: "";
+  position: absolute;
+  width: 180%;
+  height: 180%;
+  top: -40%;
+  left: -40%;
+  background: radial-gradient(
+    circle,
+    rgba(220, 60, 40, 0.25) 0%,
+    rgba(220, 60, 40, 0.08) 60%,
+    transparent 100%
+  );
+  border-radius: 50%;
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* optional halo for subtle glow around dots (base level) */
 #b2m-map .b2m-dot-halo {
   filter: blur(2px);
   opacity: 0.3;
