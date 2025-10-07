@@ -19,7 +19,7 @@
   const REGIONS_URL = CFG.divisionsUrl || "regional_div.json";
   const REGIONS_OBJ = CFG.divObject || "regional_div"; // for TopoJSON
   const STATES_URL  = CFG.statesUrl    || "australian-states.min.geojson";
-  const SUBURBS_URL = CFG.suburbLookup || "suburbs.json";
+  const SUBURBS_URL = CFG.suburbLookup || "suburbs"; // your file has no .json extension
   const CSV_URL     = CFG.cioDataCsv   || "testData.csv";
   const XLSX_URL    = CFG.cioDataXlsx  || "testData.xlsx";
   const PCINDEX_URL = CFG.pcIndexUrl   || ""; // optional; we’ll build one if missing
@@ -49,9 +49,8 @@
 
   const fetchText = (url) => fetch(url, { cache: "no-cache" }).then((r) => (r.ok ? r.text() : ""));
   const fetchJSON = (url) => fetch(url, { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-  const fetchexists = (url) => url ? fetch(url, { method: "HEAD", cache: "no-cache" }).then((r) => r.ok) : Promise.resolve(false);
 
-  // CSV parser
+  // CSV parser (kept tiny; avoids ordering issues with Papa if it loads late)
   function parseCSV(text) {
     const out = []; let i=0, cell="", row=[], q=false;
     const pushCell=()=>{row.push(cell);cell="";};
@@ -85,7 +84,7 @@
     };
     if (!geom) return false;
     if (geom.type==="Polygon") return testPoly(geom.coordinates);
-    if (geom.type==="MultiPolygon") return geom.coordinates.some(testPoly);
+    if (geom.type==="MultiPolygon") return geom.coordinates.some(poly => testPoly(poly));
     return false;
   }
 
@@ -106,7 +105,7 @@
   let statesFC=null, regionsFC=null;
   let suburbIdx=null;        // [{state, suburb, postcode, lat, lon}, ...]
   let pcIndex = null;        // external postcode-index.json (optional)
-  let pcIndexDyn = null;     // built from suburbs.json + regions (runtime)
+  let pcIndexDyn = null;     // built from suburbs + regions (runtime)
 
   // public counters
   window.B2M_countsDivision = window.B2M_countsDivision || new Map();
@@ -164,16 +163,65 @@
     return null;
   }
 
+  // ---- tolerant loaders ----
+  async function fetchSuburbsLoose() {
+    const tried = new Set();
+    const candidates = [
+      SUBURBS_URL,
+      SUBURBS_URL && !SUBURBS_URL.endsWith('.json') ? SUBURBS_URL + '.json' : null,
+      'suburbs',
+      'suburbs.json'
+    ].filter(Boolean);
+
+    for (const u of candidates) {
+      if (tried.has(u)) continue; tried.add(u);
+      try {
+        const res = await fetch(u, { cache: 'no-cache' });
+        if (!res.ok) continue;
+        const text = await res.text();
+
+        // attempt standard JSON
+        try {
+          const j = JSON.parse(text);
+          if (Array.isArray(j)) return j;
+          if (Array.isArray(j?.rows)) return j.rows; // support {rows:[...]}
+        } catch (_) { /* fall through */ }
+
+        // NDJSON fallback
+        const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        if (lines.length > 1 && lines[0].startsWith('{')) {
+          const arr = [];
+          for (const ln of lines) { try { arr.push(JSON.parse(ln)); } catch {} }
+          if (arr.length) return arr;
+        }
+      } catch (_) { /* try next */ }
+    }
+    return null;
+  }
+
+  async function fetchPCIndexLoose() {
+    if (!PCINDEX_URL) return null;
+    try {
+      const res = await fetch(PCINDEX_URL, { cache: 'no-cache' });
+      if (!res.ok) return null;
+      const txt = await res.text();
+      try { return JSON.parse(txt); } catch { return null; }
+    } catch { return null; }
+  }
+
   // load CSV/XLSX
   async function loadIncidentRows(){
     const csvText = await fetchText(CSV_URL);
     if (csvText && csvText.trim()) return rowsToObjects(parseCSV(csvText));
-    if (await fetchexists(XLSX_URL) && window.XLSX){
-      const ab = await fetch(XLSX_URL).then(r => r.ok ? r.arrayBuffer() : null);
-      if (!ab) return [];
-      const wb = XLSX.read(ab, {type:"array"});
-      const first = wb.SheetNames[0];
-      return XLSX.utils.sheet_to_json(wb.Sheets[first], {defval:""});
+    if (typeof XLSX !== "undefined") {
+      try {
+        const ab = await fetch(XLSX_URL).then(r => r.ok ? r.arrayBuffer() : null);
+        if (ab) {
+          const wb = XLSX.read(ab, {type:"array"});
+          const first = wb.SheetNames[0];
+          return XLSX.utils.sheet_to_json(wb.Sheets[first], {defval:""});
+        }
+      } catch (_) {}
     }
     return [];
   }
@@ -313,12 +361,12 @@
     window.B2M_map = L.map(root, { zoomControl:true, minZoom:3, maxZoom:12 });
     window.B2M_map.fitBounds(AU_BOUNDS);
 
-    // ---- Load datasets ----
+    // ---- Load datasets (tolerant) ----
     const [states, regions, suburbs, pcidx] = await Promise.all([
       fetchJSON(STATES_URL),
       fetchJSON(REGIONS_URL),
-      fetchexists(SUBURBS_URL).then(ok => ok ? fetchJSON(SUBURBS_URL) : null),
-      fetchexists(PCINDEX_URL).then(ok => ok ? fetchJSON(PCINDEX_URL) : null),
+      fetchSuburbsLoose(),
+      fetchPCIndexLoose(),
     ]);
 
     // Normalise
@@ -328,6 +376,7 @@
     if (regions){
       if (regions.type === "Topology") regionsFC = topoToGeo(regions, REGIONS_OBJ);
       else if (regions.type === "FeatureCollection") regionsFC = regions;
+      else if (regions.type === "Feature") regionsFC = { type:"FeatureCollection", features:[regions] };
     }
     if (regionsFC && Array.isArray(regionsFC.features)){
       regionsFC.features.forEach((f, i) => {
@@ -340,11 +389,12 @@
     suburbIdx = Array.isArray(suburbs) ? suburbs : null;
     pcIndex   = (pcidx && typeof pcidx === "object") ? pcidx : null;
 
-    LOG("URLs:", { STATES_URL, REGIONS_URL, CSV_URL });
+    LOG("URLs:", { STATES_URL, REGIONS_URL, CSV_URL, SUBURBS_URL });
     LOG("States FC:", statesFC ? "ok" : "missing");
     LOG("Regions FC:", regionsFC ? `ok (features=${regionsFC.features?.length || 0})` : "missing");
     LOG("Suburb gazetteer:", suburbIdx ? `ok (${suburbIdx.length} rows)` : "missing");
     LOG("External PC index:", pcIndex ? "ok" : "missing");
+    if (!suburbIdx) console.warn('[B2M] suburbs NOT loaded via', SUBURBS_URL, '— tried variants (.json, NDJSON) too.');
 
     if (!statesFC) banner("States file missing/invalid");
     if (!regionsFC || !Array.isArray(regionsFC.features) || !regionsFC.features.length)
@@ -354,7 +404,7 @@
     if (!pcIndex && suburbIdx && regionsFC){
       pcIndexDyn = buildPcIndexFromSuburbs();
       const sz = pcIndexDyn ? Object.keys(pcIndexDyn).length : 0;
-      if (sz === 0) banner("Could not build postcode index from suburbs.json — divisions will stay at 0 unless CSV has lat/lon.", "#92400e");
+      if (sz === 0) banner("Could not build postcode index from suburbs — divisions need lat/lon.", "#92400e");
       else LOG(`Dynamic postcode index size: ${sz}`);
     }
 
@@ -399,8 +449,6 @@
       LOG("CSV/XLSX rows:", Array.isArray(rows) ? rows.length : 0);
       if (!rows || !rows.length) banner("No rows loaded from CSV/XLSX");
 
-      // If we still have no postcode index AND no lat/lon AND no suburbs.json,
-      // we cannot assign to divisions — warn loudly so it’s clear.
       if (!pcIndex && !pcIndexDyn && !suburbIdx){
         banner("No postcode index and no suburbs.json — division counts impossible. Counting to states only.", "#6b21a8");
       }
