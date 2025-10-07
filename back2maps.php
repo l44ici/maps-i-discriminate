@@ -40,7 +40,6 @@ final class Back2Maps {
       <div class="back2maps" data-divzoom="<?php echo esc_attr($divzoom); ?>" data-markerzoom="<?php echo esc_attr($markerzoom); ?>">
         <div class="b2m-card">
           <h2 class="b2m-title"><?php echo esc_html($atts['title']); ?></h2>
-          <p class="b2m-sub"><?php echo esc_html($atts['subtitle']); ?></p>
           <div id="b2m-map" style="height:<?php echo esc_attr($atts['height']); ?>"></div>
           <div class="b2m-note">Zoom out for state view; zoom in to see regional divisions and markers.</div>
         </div>
