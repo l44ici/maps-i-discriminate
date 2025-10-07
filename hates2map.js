@@ -155,6 +155,31 @@
     return hit ? { lat: +hit.lat, lon: +hit.lon } : null;
   }
 
+  // ✅ state-properties → standardized abbreviation used by counters
+  function propToStateAbbr(props = {}) {
+    const direct = props.ST || props.STATE_ABBR || props.state_abbrev || props.State || props.state || "";
+    const ab = asState(direct);
+    if (ab) return ab;
+
+    const name = (props.STATE_NAME || props.STATE || props.Name || props.name || "")
+      .toString()
+      .trim()
+      .toUpperCase();
+
+    const MAP = {
+      "NEW SOUTH WALES": "NSW",
+      "VICTORIA": "VIC",
+      "QUEENSLAND": "QLD",
+      "SOUTH AUSTRALIA": "SA",
+      "WESTERN AUSTRALIA": "WA",
+      "TASMANIA": "TAS",
+      "NORTHERN TERRITORY": "NT",
+      "AUSTRALIAN CAPITAL TERRITORY": "ACT",
+      "ACT": "ACT"
+    };
+    return MAP[name] || "";
+  }
+
   function latLonToDivision(lat, lon) {
     if (!regionsFC || !Array.isArray(regionsFC.features)) return null;
     const pt = [lon, lat];
@@ -247,7 +272,6 @@
     LOG(`Matched divisions: ${matchedDivs}, states: ${matchedStates}, total: ${objs.length}`);
   }
 
-
   function applyCountsToRegions() {
     if (!regionLayer) return;
     regionLayer.eachLayer((l) => {
@@ -262,13 +286,14 @@
     });
   }
 
+  // ✅ use normalized state code so popups reflect the counters
   function applyCountsToStates() {
     if (!stateLayer) return;
     stateLayer.eachLayer((l) => {
       const p = (l.feature && l.feature.properties) || {};
       const name = p.STATE_NAME || p.STATE || p.Name || p.name || "State";
-      const abbr = (p.ST || p.STATE_ABBR || p.state_abbrev || p.State || p.state || name).toString().toUpperCase();
-      const n = (window.B2M_countsState && window.B2M_countsState.get(abbr)) || 0;
+      const abbr = propToStateAbbr(p);
+      const n = (abbr && window.B2M_countsState.get(abbr)) || 0;
       if (l.getPopup && l.getPopup()) l.setPopupContent(`<strong>${name}</strong><br>${n} report(s)`);
     });
   }
@@ -344,12 +369,12 @@
         onEachFeature: (feat, layer) => {
           const p = feat.properties || {};
           const name = p.STATE_NAME || p.STATE || p.Name || p.name || "State";
-          const abbr = (p.ST || p.STATE_ABBR || p.state_abbrev || p.State || p.state || name).toString().toUpperCase();
-          const n = window.B2M_countsState.get(abbr) || 0;
+          const abbr = propToStateAbbr(p);                 // <-- normalized
+          const n = (abbr && window.B2M_countsState.get(abbr)) || 0;
           layer.bindPopup(`<strong>${name}</strong><br>${n} report(s)`);
           layer.on({
             mouseover: (e) => e.target.setStyle({ weight: 3 }),
-            mouseout: (e) => stateLayer.resetStyle(e.target),
+            mouseout:  (e) => stateLayer.resetStyle(e.target),
           });
         },
       }).addTo(B2M_map);
