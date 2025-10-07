@@ -76,11 +76,10 @@ final class Back2Maps {
     wp_enqueue_script(
       'back2maps-js',
       $this->url('hates2map.js'),
-      ['leaflet','papaparse','turf','topojson','xlsx'],
-      '1.5.0',
+      ['leaflet','xlsx'],
+      '1.5.6',   // <— bump this
       true
     );
-
 
     // ---- Your files live in the plugin ROOT (per your screenshot)
     $base_url = plugin_dir_url(__FILE__);
