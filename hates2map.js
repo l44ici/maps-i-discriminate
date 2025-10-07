@@ -1,267 +1,258 @@
-/* ===== Back2Maps — zoom-aware states vs divisions + CSV/XLSX markers ===== */
-(() => {
-  "use strict";
+/* ===== Back2Maps — Map + postcode-first ingestion (error rows skipped) ===== */
+(function () {
+  'use strict';
 
-  const AU_BOUNDS = [[-44.0,112.0],[-10.0,154.0]];
-  const fmt = n => new Intl.NumberFormat().format(n);
+  // --- config from PHP ---
+  const CFG = (typeof B2M === 'object' && B2M) || {};
+  const ROOT_ID     = CFG.rootId     || 'back2maps-root';
+  const CSV_URL     = CFG.csvUrl     || 'testData.csv';
+  const REGIONS_URL = CFG.regionalUrl|| '';
+  const STATES_URL  = CFG.statesUrl  || '';
+  const SUBURBS_URL = CFG.suburbsUrl || '';
+  const PCINDEX_URL = CFG.pcIndexUrl || '';
+  const DIV_ZOOM    = +CFG.divZoom   || 6;
+  const MRK_ZOOM    = +CFG.markerZoom|| 6;
 
-  // ---------- settings (tweak these) ----------
-  const SHOW_DIV_ZOOM     = Number((window.B2M && B2M.minZoomForDiv) ?? 5.5); // divisions appear at/after this zoom
-  const SHOW_MARKERS_ZOOM = Number((window.B2M && B2M.minZoomForMarkers) ?? SHOW_DIV_ZOOM); // markers appear from this zoom
+  // Australia view box
+  const AU_BOUNDS = [[-44.0, 112.0], [-10.0, 154.0]];
 
-  // ---------- header helpers ----------
-  const pick = (row, keys) => { for (const k of keys) { if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== "") return String(row[k]).trim(); } return undefined; };
-  const getLat    = r => parseFloat(pick(r, ["lat","Lat","LAT","latitude","Latitude"]));
-  const getLon    = r => parseFloat(pick(r, ["lon","Lon","LON","lng","Lng","LNG","longitude","Longitude"]));
-  const getState  = r => pick(r, ["State / Territory","State","state","STATE","Territory"]);
-  const getPC     = r => { const v = pick(r, ["Post Code","postcode","Postcode","PC","Pcode","Zip"]); return v ? String(v).replace(/\D/g,"").padStart(4,"0") : undefined; };
-  const getSuburb = r => pick(r, ["Suburb","suburb","Town","Locality","City"]);
+  // ---------- utilities ----------
+  const ST_ABBR = new Set(["NSW","ACT","VIC","QLD","SA","WA","TAS","NT"]);
+  const norm    = s => (s ?? '').toString().trim();
+  const asState = s => { const x = norm(s).toUpperCase(); return ST_ABBR.has(x) ? x : ""; };
+  const asPostcode = s => { const x = norm(s).replace(/\s+/g,''); return /^\d{4}$/.test(x) ? x : ""; };
 
-  // region/state identifiers
-  const regionIdOf = f => { const p = (f && f.properties) || {}; return p.division_code || p.region_id || p.REGION_ID || p.code || p.id || p.name; };
-  const regionStateOf = f => { const p = (f && f.properties) || {}; return p.state || p.STATE || p.State || p.st || null; };
-  const stateIdOf = f => { const p = (f && f.properties) || {}; return p.STATE_NAME || p.state_name || p.name || p.State || p.STATE || p.code || p.abbrev; };
+  const fetchText = url => fetch(url, {cache:'no-cache'}).then(r => r.ok ? r.text() : '');
+  const fetchJSON = url => fetch(url, {cache:'no-cache'}).then(r => r.ok ? r.json() : null).catch(()=>null);
 
-  // choropleth ramp + styles
-  function getColor(d){ return d>40?"#7f0000":d>30?"#b30000":d>20?"#d7301f":d>10?"#ef6548":d>5?"#fdbb84":d>0?"#fee8c8":"#f7f7f7"; }
-  const styleForCount = c => ({ weight:1, color:"#71797E", fillOpacity:0.65, fillColor:getColor(c || 0) });
-
-  // ---------- loaders ----------
-  async function fetchJSON(url){ const r=await fetch(url,{cache:"no-cache"}); if(!r.ok) throw new Error(`${r.status} ${url}`); return r.json(); }
-  async function fetchText(url){ const r=await fetch(url,{cache:"no-cache"}); if(!r.ok) throw new Error(`${r.status} ${url}`); return r.text(); }
-  async function fetchArrayBuffer(url){ const r=await fetch(url,{cache:"no-cache"}); if(!r.ok) throw new Error(`${r.status} ${url}`); return r.arrayBuffer(); }
-
-  async function loadCSVorXLSX(csvUrl, xlsxUrl){
-    // try CSV
-    try {
-      const csv = await fetchText(csvUrl);
-      if (csv && csv.trim().length) {
-        return await new Promise((res,rej)=>Papa.parse(csv,{
-          header:true, skipEmptyLines:true, transformHeader:h=>String(h).trim(),
-          complete: r=>res(r.data||[]), error: rej
-        }));
+  // Basic CSV parser (handles quotes, commas). Good enough for our 3–5 columns.
+  function parseCSV(text) {
+    const out = [];
+    let i = 0, f = 0, row = [], cell = '', q = false;
+    const push = () => { row.push(cell); cell=''; };
+    const endRow = () => { row.push(cell); out.push(row); row=[]; cell=''; };
+    while (i < text.length) {
+      const c = text[i++];
+      if (q) {
+        if (c === '"') {
+          if (text[i] === '"') { cell += '"'; i++; } else { q = false; }
+        } else cell += c;
+        continue;
       }
-    } catch(_) { /* try xlsx */ }
-    // XLSX fallback
-    try {
-      const buf = await fetchArrayBuffer(xlsxUrl);
-      const wb  = XLSX.read(buf, { type:"array" });
-      const ws  = wb.Sheets[wb.SheetNames[0]];
-      return XLSX.utils.sheet_to_json(ws, { defval:"", raw:false });
-    } catch(e) {
-      console.error("[B2M] No CSV/XLSX data found", e);
-      return [];
+      if (c === '"') { q = true; continue; }
+      if (c === ',') { push(); continue; }
+      if (c === '\n') { endRow(); f=0; continue; }
+      if (c === '\r') { continue; }
+      cell += c;
     }
+    if (cell.length || row.length) endRow();
+    return out;
   }
 
-  async function loadDivisions(url, objName){
-    const raw = await fetchJSON(url);
-    if (raw?.type === "FeatureCollection") return raw;
-    if (raw?.type === "Topology" && window.topojson) {
-      const key = (objName||"").trim() || Object.keys(raw.objects||{})[0];
-      const fc  = topojson.feature(raw, raw.objects[key]);
-      return (fc.type === "FeatureCollection") ? fc : { type:"FeatureCollection", features:[fc] };
-    }
-    throw new Error("Unknown divisions format");
+  // point-in-polygon (ray casting) for [lon,lat] in GeoJSON polygon/multipolygon
+  function pointInPolygon(pt, geom) {
+    const x = pt[0], y = pt[1];
+    const testPoly = (poly) => {
+      let inside = false;
+      for (let ring of poly) {
+        for (let i=0, j=ring.length-1; i<ring.length; j=i++) {
+          const xi = ring[i][0], yi = ring[i][1];
+          const xj = ring[j][0], yj = ring[j][1];
+          const intersect = ((yi>y)!==(yj>y)) && (x < (xj - xi) * (y - yi) / ((yj - yi) || 1e-12) + xi);
+          if (intersect) inside = !inside;
+        }
+      }
+      return inside;
+    };
+    if (!geom) return false;
+    if (geom.type === 'Polygon') return testPoly(geom.coordinates);
+    if (geom.type === 'MultiPolygon') return geom.coordinates.some(testPoly);
+    return false;
   }
 
-  // ---------- suburb/postcode lookup (optional) ----------
-  let suburbIndex = null; // "STATE|SUBURB|POSTCODE" -> [lon,lat]
-  function buildSuburbIndex(geojson) {
-    const map = new Map();
-    if (!geojson?.features) return map;
-    for (const f of geojson.features) {
-      if (f?.geometry?.type !== "Point") continue;
-      const [lon, lat] = f.geometry.coordinates || [];
-      const P = f.properties || {};
-      const s  = String(P.state || P.State || "").toUpperCase();
-      const sb = String(P.suburb || P.Suburb || P.locality || "").toUpperCase();
-      const pc = String(P.postcode || P.Postcode || P.pc || "").replace(/\D/g,"");
-      const keys = new Set([[s,sb,pc],[s,sb,""],["",sb,pc]].map(a=>a.join("|")));
-      for (const k of keys) if (k.replaceAll("|","") !== "") map.set(k,[lon,lat]);
+  // topojson → geojson (supports the common "objects.regional_div")
+  function topoToGeo(topology, objectName) {
+    if (!topology || !topology.objects) return null;
+    const obj = topology.objects[objectName] || Object.values(topology.objects)[0];
+    // ultra light convert (arcs already absolute in many exported files). If not, user should supply GeoJSON.
+    // We try a naive approach: if 'geometries' contains coordinates directly, pass through.
+    if (obj && obj.type === 'GeometryCollection') {
+      const fc = { type:'FeatureCollection', features: [] };
+      for (const g of obj.geometries) {
+        fc.features.push({ type:'Feature', properties: g.properties || {}, geometry: g });
+      }
+      return fc;
     }
-    return map;
-  }
-  function lookupCoords(state, suburb, pc) {
-    if (!suburbIndex) return null;
-    const s  = String(state||"").toUpperCase();
-    const sb = String(suburb||"").toUpperCase();
-    const p  = (pc||"").replace(/\D/g,"");
-    for (const k of [[s,sb,p],[s,sb,""],["",sb,p]].map(a=>a.join("|"))) if (suburbIndex.has(k)) return suburbIndex.get(k);
     return null;
   }
 
-  // ---------- main ----------
-  document.addEventListener("DOMContentLoaded", async () => {
-    // Map
-    const map = L.map("b2m-map", { preferCanvas:true, worldCopyJump:true });
+  // ---------- state ----------
+  let map, stateLayer, regionLayer, markers;
+  let regionsFC = null;       // GeoJSON FeatureCollection of regional divisions
+  let statesFC  = null;       // GeoJSON FeatureCollection of states
+  let suburbIdx = null;       // [{state,suburb,postcode,lat,lon},...]
+  let pcIndex   = null;       // {"2000":"NSW-07", ...}
+  const countsDivision = new Map(); // divisionId -> count
+  const countsState    = new Map(); // stateAbbr  -> count
+
+  function bumpDivisionCount(id) { if (!id) return; countsDivision.set(id, (countsDivision.get(id)||0)+1); }
+  function bumpStateCount(st)    { if (!st) return; countsState.set(st, (countsState.get(st)||0)+1); }
+
+  // locate a division by postcode via table, else null
+  function postcodeToDivision(pc) {
+    if (pcIndex && pcIndex[pc]) return { divisionId: pcIndex[pc] };
+    return null;
+  }
+
+  // suburb/state(/pc) to lat/lon via gazetteer
+  function gazetteerLookup({state, suburb, postcode}) {
+    if (!suburbIdx) return null;
+    const s = asState(state), sub = norm(suburb).toLowerCase();
+    let hit = suburbIdx.find(r =>
+      asState(r.state) === s &&
+      norm(r.suburb).toLowerCase() === sub &&
+      (!postcode || asPostcode(r.postcode) === asPostcode(postcode))
+    );
+    return hit ? {lat: +hit.lat, lon: +hit.lon} : null;
+  }
+
+  // point → divisionId via polygon hit
+  function pointToDivisionLatLon(lat, lon) {
+    if (!regionsFC) return null;
+    const pt = [lon, lat];
+    for (const f of regionsFC.features) {
+      if (pointInPolygon(pt, f.geometry)) {
+        return { divisionId: (f.properties && (f.properties.id || f.properties.code || f.properties.name)) || null,
+                 state: (f.properties && (f.properties.state || f.properties.ST || f.properties.st)) || null };
+      }
+    }
+    return null;
+  }
+
+  // ---------- ingestion (priority: postcode → suburb → state; else skip) ----------
+  function ingestRow(rec) {
+    const suburb = norm(rec.Suburb ?? rec.suburb ?? rec.Town ?? rec.Locality ?? rec.City);
+    const state  = asState(rec['State / Territory'] ?? rec.State ?? rec.state ?? rec.Territory);
+    const pc     = asPostcode(rec['Post Code'] ?? rec.Postcode ?? rec.postcode ?? rec.PC ?? rec.Zip);
+
+    // 1) postcode → division
+    if (pc) {
+      const hit = postcodeToDivision(pc);
+      if (hit && hit.divisionId) {
+        const st = state || '';
+        if (st) bumpDivisionCount(hit.divisionId); else bumpStateCount(st);
+        // postcode markers are optional; disabled by default to avoid clutter
+        return;
+      }
+    }
+
+    // 2) suburb+state → lat/lon → division
+    if (suburb && state) {
+      const pos = gazetteerLookup({state, suburb, postcode: pc});
+      if (pos && Number.isFinite(pos.lat) && Number.isFinite(pos.lon)) {
+        const div = pointToDivisionLatLon(pos.lat, pos.lon);
+        if (div && div.divisionId) { bumpDivisionCount(div.divisionId); }
+        else { bumpStateCount(state); }
+        if (map.getZoom() >= MRK_ZOOM) {
+          L.circleMarker([pos.lat, pos.lon], {radius:4, weight:1, color:'#334155', fillColor:'#334155', fillOpacity:.8})
+            .addTo(markers)
+            .bindPopup(`${suburb}, ${state}${pc?(' '+pc):''}`);
+        }
+        return;
+      }
+    }
+
+    // 3) state-only fallback
+    if (state) {
+      bumpStateCount(state);
+      return;
+    }
+
+    // 4) otherwise ignore silently
+  }
+
+  // ---------- CSV loading ----------
+  async function loadCSVRows() {
+    const txt = await fetchText(CSV_URL);
+    if (!txt) return [];
+    const rows = parseCSV(txt);
+    if (!rows.length) return [];
+    const hdr = rows[0].map(h => norm(h));
+    const out = [];
+    for (let i=1;i<rows.length;i++) {
+      const r = rows[i];
+      if (r.length===1 && norm(r[0])==='') continue;
+      const obj = {};
+      for (let c=0;c<r.length;c++) obj[hdr[c]||('col'+c)] = r[c];
+      out.push(obj);
+    }
+    return out;
+  }
+
+  // ---------- map + layers ----------
+  function styleState()  { return {weight:2, color:'#64748b', fillColor:'#f8fafc', fillOpacity:0.2}; }
+  function styleRegion() { return {weight:1, color:'#475569', fillColor:'#cbd5e1', fillOpacity:0.05}; }
+
+  async function buildMap() {
+    const root = document.getElementById(ROOT_ID) || document.querySelector('.b2m-map');
+    if (!root) return;
+
+    map = L.map(root, {zoomControl:true, minZoom:3, maxZoom:12});
     map.fitBounds(AU_BOUNDS);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{ attribution:'&copy; OpenStreetMap', maxZoom:18 }).addTo(map);
+    markers = L.layerGroup().addTo(map);
 
-    // Panes
-    map.createPane("divisionsPane"); map.getPane("divisionsPane").style.zIndex = 410;
-    map.createPane("markersPane");   map.getPane("markersPane").style.zIndex = 420;
+    // Load datasets (optional ones won’t break)
+    const [states, regions, suburbs, pcidx] = await Promise.all([
+      STATES_URL ? fetchJSON(STATES_URL) : null,
+      REGIONS_URL ? fetchJSON(REGIONS_URL) : null,
+      SUBURBS_URL ? fetchJSON(SUBURBS_URL) : null,
+      PCINDEX_URL ? fetchJSON(PCINDEX_URL) : null,
+    ]);
 
-    // Data state
-    let divisionsFC = { type:"FeatureCollection", features:[] };
-    let statesFC    = { type:"FeatureCollection", features:[] };
-    let divisionsLayer = null;
-    let statesLayer    = null;
-    const markers   = L.layerGroup([], { pane:"markersPane" });
-    const bbox      = L.latLngBounds();
-    const countsByDivision = new Map(); // divisionId -> count
-    const countsByState    = new Map(); // stateId   -> count
+    statesFC  = states && states.type ? states : null;
 
-    // Load polygons
-    try { divisionsFC = await loadDivisions(B2M.divisionsUrl, B2M.divObject || "regional_div"); }
-    catch (e) { console.error("[B2M] divisions load error", e); }
-    try { statesFC = await fetchJSON(B2M.statesUrl); }
-    catch (e) { console.error("[B2M] states load error", e); }
+    // handle TopoJSON for regions if needed
+    if (regions && regions.type === 'Topology') {
+      regionsFC = topoToGeo(regions, 'regional_div');
+    } else {
+      regionsFC = regions && regions.type ? regions : null;
+    }
+    suburbIdx = Array.isArray(suburbs) ? suburbs : null;
+    pcIndex   = pcidx && typeof pcidx === 'object' ? pcidx : null;
 
-    // Optional suburb index
-    try { if (B2M.suburbLookup) suburbIndex = buildSuburbIndex(await fetchJSON(B2M.suburbLookup)); } catch (_) { suburbIndex = null; }
-
-    // Build layers (don't add yet; we toggle on zoom)
-    divisionsLayer = L.geoJSON(divisionsFC, {
-      pane: "divisionsPane",
-      filter: f => ["Polygon","MultiPolygon"].includes(f?.geometry?.type),
-      style: f => styleForCount(0),
-      onEachFeature: (f, layer) => {
-        const id = regionIdOf(f) || "(unknown)";
-        layer.on({
-          mouseover: () => layer.setStyle({ weight:2, color:"#71797E", fillOpacity:0.75, fillColor:getColor(countsByDivision.get(id)||0) }),
-          mouseout:  () => layer.setStyle(styleForCount(countsByDivision.get(id)||0)),
-          click:     () => {
-            const c = countsByDivision.get(id) || 0;
-            const st = regionStateOf(f) || "—";
-            layer.bindTooltip(`<strong>${id}</strong><br/>State: ${st}<br/>${fmt(c)} report(s)`).openTooltip();
-          }
-        });
-      }
-    });
-
-    statesLayer = L.geoJSON(statesFC, {
-      pane: "divisionsPane",
-      filter: f => ["Polygon","MultiPolygon"].includes(f?.geometry?.type),
-      style: f => styleForCount(0),
-      onEachFeature: (f, layer) => {
-        const sid = stateIdOf(f) || "(state)";
-        layer.on({
-          mouseover: () => layer.setStyle({ weight:2, color:"#71797E", fillOpacity:0.75, fillColor:getColor(countsByState.get(sid)||0) }),
-          mouseout:  () => layer.setStyle(styleForCount(countsByState.get(sid)||0)),
-          click:     () => {
-            const c = countsByState.get(sid) || 0;
-            layer.bindTooltip(`<strong>${sid}</strong><br/>${fmt(c)} report(s)`).openTooltip();
-          }
-        });
-      }
-    });
-
-    // CSV/XLSX rows
-    const rows = await loadCSVorXLSX(B2M.cioDataCsv || B2M.cioData, B2M.cioDataXlsx || "");
-
-    // Helpers
-    function addMarker(lat, lon, props) {
-      L.circleMarker([lat,lon],{
-        radius:5, weight:1, color:"#5b6b75", fillOpacity:0.85, fillColor:"#1f78b4"
-      }).bindTooltip(() => {
-        const lines=[];
-        if (props.suburb) lines.push(`<strong>${props.suburb}</strong>`);
-        if (props.state || props.postcode) lines.push([props.state,props.postcode].filter(Boolean).join(" "));
-        if (props.division) lines.push(props.division);
-        return lines.join("<br/>") || "Report";
-      }).addTo(markers);
-      bbox.extend([lat,lon]);
+    if (statesFC) {
+      stateLayer = L.geoJSON(statesFC, { style: styleState }).addTo(map);
+    }
+    if (regionsFC) {
+      regionLayer = L.geoJSON(regionsFC, { style: styleRegion });
+      // show regions only when zoomed in
+      const toggleRegions = () => {
+        if (!regionLayer) return;
+        const on = map.getZoom() >= DIV_ZOOM;
+        if (on && !map.hasLayer(regionLayer)) map.addLayer(regionLayer);
+        if (!on && map.hasLayer(regionLayer)) map.removeLayer(regionLayer);
+      };
+      map.on('zoomend', toggleRegions);
+      toggleRegions();
     }
 
-    function assignToDivision(lat, lon, rowState){
-      const pt = turf.point([lon,lat]);
-      for (const f of divisionsFC.features) {
-        try {
-          if (turf.booleanPointInPolygon(pt, f)) {
-            const divId = regionIdOf(f) || "(unknown)";
-            const st    = regionStateOf(f) || rowState || "Unknown";
-            countsByDivision.set(divId, (countsByDivision.get(divId)||0) + 1);
-            countsByState.set(st, (countsByState.get(st)||0) + 1);
-            return { division: divId, state: st };
-          }
-        } catch {}
-      }
-      return null;
+    // ingest CSV
+    const rows = await loadCSVRows();
+    rows.forEach(ingestRow);
+
+    // optional: update a quick title tooltip on hover for regions
+    if (regionLayer) {
+      regionLayer.eachLayer(l => {
+        const p = l.feature && l.feature.properties || {};
+        const id = p.id || p.code || p.name || 'region';
+        const count = countsDivision.get(id) || 0;
+        l.bindTooltip(`${p.name || id}: ${count}`, {sticky:true});
+      });
     }
 
-    function assignToState(lat, lon, rowState){
-      if (!statesFC.features?.length) return { division:null, state: rowState || "Unassigned" };
-      const pt = turf.point([lon,lat]);
-      for (const f of statesFC.features) {
-        try {
-          if (turf.booleanPointInPolygon(pt, f)) {
-            const sid = stateIdOf(f) || (rowState || "Unassigned");
-            countsByState.set(sid, (countsByState.get(sid)||0) + 1);
-            return { division:null, state: sid };
-          }
-        } catch {}
-      }
-      const sid = rowState || "Unassigned";
-      countsByState.set(sid, (countsByState.get(sid)||0) + 1);
-      return { division:null, state: sid };
-    }
+    // state counts can be shown later if you add a legend; for now we just keep them.
+    setTimeout(() => map.invalidateSize(), 150);
+  }
 
-    function repaintDivisions(){ if (divisionsLayer) divisionsLayer.setStyle(f => styleForCount(countsByDivision.get(regionIdOf(f)) || 0)); }
-    function repaintStates(){ if (statesLayer) statesLayer.setStyle(f => styleForCount(countsByState.get(stateIdOf(f)) || 0)); }
-
-    // Process rows
-    for (const r of rows) {
-      let lat = getLat(r);
-      let lon = getLon(r);
-      const rowState  = getState(r);
-      const rowSuburb = getSuburb(r);
-      const rowPC     = getPC(r);
-
-      if ((Number.isNaN(lat) || Number.isNaN(lon) || lat===undefined || lon===undefined) && suburbIndex) {
-        const hit = lookupCoords(rowState, rowSuburb, rowPC);
-        if (hit && hit.length===2) { lon=parseFloat(hit[0]); lat=parseFloat(hit[1]); }
-      }
-      if (Number.isNaN(lat) || Number.isNaN(lon) || lat===undefined || lon===undefined) continue;
-
-      const inDiv = assignToDivision(lat, lon, rowState);
-      const res   = inDiv || assignToState(lat, lon, rowState);
-
-      addMarker(lat, lon, { suburb: rowSuburb, state: res.state, postcode: rowPC, division: res.division });
-    }
-
-    // Paint & initial view
-    repaintDivisions();
-    repaintStates();
-    if (bbox.isValid()) map.fitBounds(bbox.pad(0.15)); else map.fitBounds(AU_BOUNDS);
-
-    // --- zoom toggling: states when zoomed out, divisions (and markers) when zoomed in ---
-    function updateVisibility() {
-      const z = map.getZoom();
-      const showDiv = z >= SHOW_DIV_ZOOM;
-      const showMarkers = z >= SHOW_MARKERS_ZOOM;
-
-      // swap polygon layers
-      if (showDiv) {
-        if (map.hasLayer(statesLayer)) map.removeLayer(statesLayer);
-        if (!map.hasLayer(divisionsLayer)) divisionsLayer.addTo(map);
-      } else {
-        if (map.hasLayer(divisionsLayer)) map.removeLayer(divisionsLayer);
-        if (!map.hasLayer(statesLayer)) statesLayer.addTo(map);
-      }
-
-      // markers (optional)
-      if (showMarkers) {
-        if (!map.hasLayer(markers)) markers.addTo(map);
-      } else {
-        if (map.hasLayer(markers)) map.removeLayer(markers);
-      }
-    }
-
-    map.on("zoomend", updateVisibility);
-    updateVisibility(); // set initial visibility
-
-    // size fix
-    setTimeout(() => map.invalidateSize(), 120);
-  });
+  document.addEventListener('DOMContentLoaded', buildMap);
 })();
