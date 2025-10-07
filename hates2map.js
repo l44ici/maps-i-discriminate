@@ -94,6 +94,167 @@
   // ---------- main ----------
   document.addEventListener("DOMContentLoaded", async () => {
 
+  /* === ADD-ONLY: Count CSV rows into regional divisions / states (no markers) === */
+  (function () {
+    if (window.B2M_countFromCSV) return; // prevent duplicate adds
+
+    // ------- small helpers -------
+    const norm = s => (s ?? '').toString().trim();
+    const STS  = new Set(["NSW","ACT","VIC","QLD","SA","WA","TAS","NT"]);
+    const asState = s => { const x = norm(s).toUpperCase(); return STS.has(x) ? x : ""; };
+    const asPostcode = s => { const x = norm(s).replace(/\s+/g,''); return /^\d{4}$/.test(x) ? x : ""; };
+
+    // Optional indexes you may already have (provide them on window to enable):
+    // - window.B2M_pcIndex   -> {"2541":"NSW-SouthCoast", ...}
+    // - window.B2M_suburbs   -> [{state,suburb,postcode,lat,lon}, ...]
+    // - window.B2M_regionsFC -> GeoJSON FeatureCollection of regional divisions
+    // - window.B2M_regionLayer -> L.geoJSON layer already on the map
+
+    // create (or reuse) the global count maps
+    window.B2M_countsDivision = window.B2M_countsDivision || new Map(); // divisionId -> n
+    window.B2M_countsState    = window.B2M_countsState    || new Map(); // stateAbbr  -> n
+    const bumpDiv = id => { if (!id) return; window.B2M_countsDivision.set(id,(window.B2M_countsDivision.get(id)||0)+1); };
+    const bumpSt  = st => { if (!st) return; window.B2M_countsState.set(st,(window.B2M_countsState.get(st)||0)+1); };
+
+    // minimal CSV parser (quoted cells ok)
+    function parseCSV(text){
+      const out=[]; let i=0, cell="", row=[], q=false;
+      const pushCell=()=>{row.push(cell);cell="";}; const pushRow=()=>{row.push(cell);out.push(row);row=[];cell="";};
+      while(i<text.length){const c=text[i++]; if(q){ if(c==='\"'){ if(text[i]==='\"'){cell+='\"';i++;} else q=false; }
+        else cell+=c; continue; }
+        if(c==='\"'){ q=true; continue; }
+        if(c===','){ pushCell(); continue; }
+        if(c==='\n'){ pushRow(); continue; }
+        if(c==='\r') continue;
+        cell+=c;
+      }
+      if(cell.length||row.length) pushRow(); return out;
+    }
+
+    async function fetchText(url){ const r=await fetch(url,{cache:'no-cache'}); return r.ok? r.text() : ''; }
+
+    // postcode -> division via optional index
+    function postcodeToDivision(pc){
+      const idx = window.B2M_pcIndex; if (idx && idx[pc]) return idx[pc];
+      return null;
+    }
+
+    // suburb/state(/pc) -> lat/lon via optional gazetteer
+    function suburbToLatLon(state, suburb, pc){
+      const gaz = Array.isArray(window.B2M_suburbs) ? window.B2M_suburbs : null;
+      if (!gaz) return null;
+      const st = asState(state), sub = norm(suburb).toLowerCase(), p = asPostcode(pc);
+      const hit = gaz.find(r => asState(r.state)===st && norm(r.suburb).toLowerCase()===sub && (!p || asPostcode(r.postcode)===p));
+      return hit ? {lat:+hit.lat, lon:+hit.lon} : null;
+    }
+
+    // point -> divisionId via polygons (uses optional B2M_regionsFC)
+    function latLonToDivision(lat, lon){
+      const fc = window.B2M_regionsFC; if (!fc) return null;
+      const pt=[lon,lat];
+      function pip(poly){
+        let inside=false;
+        for (const ring of poly){
+          for(let i=0,j=ring.length-1;i<ring.length;j=i++){
+            const xi=ring[i][0], yi=ring[i][1], xj=ring[j][0], yj=ring[j][1];
+            const inter=((yi>pt[1])!==(yj>pt[1])) && (pt[0] < (xj-xi)*(pt[1]-yi)/((yj-yi)||1e-12)+xi);
+            if (inter) inside=!inside;
+          }
+        }
+        return inside;
+      }
+      for (const f of fc.features){
+        const g=f.geometry;
+        if (!g) continue;
+        if (g.type==='Polygon' && pip(g.coordinates)) return (f.properties && (f.properties.id||f.properties.code||f.properties.name)) || null;
+        if (g.type==='MultiPolygon' && g.coordinates.some(pip)) return (f.properties && (f.properties.id||f.properties.code||f.properties.name)) || null;
+      }
+      return null;
+    }
+
+    // PUBLIC: read rows and increment counts only (no markers)
+    window.B2M_countFromCSV = async function(csvUrl){
+      const url = csvUrl || (window.B2M && B2M.csvUrl) || 'testData.csv';
+      const txt = await fetchText(url);
+      if (!txt) { console.warn('[B2M] CSV not found/empty:', url); return; }
+
+      // reset maps (comment out if you want additive behaviour)
+      window.B2M_countsDivision.clear();
+      window.B2M_countsState.clear();
+
+      const rows = parseCSV(txt); if (!rows.length) return;
+      const headers = rows[0].map(h=>norm(h).toLowerCase());
+      const idx = names => { const set=names.map(n=>n.toLowerCase()); for(let i=0;i<headers.length;i++) if(set.includes(headers[i])) return i; return -1; };
+
+      const iLat = idx(['lat','latitude']);
+      const iLon = idx(['lon','lng','longitude']);
+      const iSub = idx(['suburb','town','city','locality']);
+      const iSta = idx(['state / territory','state','territory']);
+      const iPc  = idx(['post code','postcode','zip','pc']);
+
+      for (let r=1;r<rows.length;r++){
+        const row = rows[r]; if (!row || !row.length) continue;
+
+        // 0) read common fields
+        const state  = iSta>=0 ? asState(row[iSta]) : '';
+        const pc     = iPc>=0  ? asPostcode(row[iPc]) : '';
+        const suburb = iSub>=0 ? norm(row[iSub]) : '';
+
+        // 1) postcode → division
+        if (pc){
+          const divId = postcodeToDivision(pc);
+          if (divId){ bumpDiv(divId); continue; }
+        }
+
+        // 2) lat/lon direct → division (if your CSV has them)
+        const lat = iLat>=0 ? +row[iLat] : NaN;
+        const lon = iLon>=0 ? +row[iLon] : NaN;
+        if (Number.isFinite(lat) && Number.isFinite(lon)){
+          const divId = latLonToDivision(lat, lon);
+          if (divId) { bumpDiv(divId); continue; }
+          if (state) { bumpSt(state); continue; }
+          continue; // unplaced → ignore
+        }
+
+        // 3) suburb+state → lat/lon → division
+        if (suburb && state){
+          const pos = suburbToLatLon(state, suburb, pc);
+          if (pos){
+            const divId = latLonToDivision(pos.lat, pos.lon);
+            if (divId) { bumpDiv(divId); continue; }
+            bumpSt(state); continue;
+          }
+        }
+
+        // 4) state-only fallback
+        if (state){ bumpSt(state); continue; }
+
+        // 5) otherwise ignore (bad row)
+      }
+
+      console.log('[B2M] Counted:',
+        window.B2M_countsDivision.size, 'divisions;',
+        Array.from(window.B2M_countsDivision.values()).reduce((a,b)=>a+b,0), 'reports (divisions total);',
+        Array.from(window.B2M_countsState.values()).reduce((a,b)=>a+b,0), 'reports (state-only).'
+      );
+    };
+
+    // OPTIONAL: apply counts to an existing region layer’s popups/tooltips
+    // Call this after B2M_countFromCSV() if your layer already exists.
+    window.B2M_applyCountsToRegions = function(){
+      const layer = window.B2M_regionLayer; if (!layer) return;
+      layer.eachLayer(l => {
+        const p = (l.feature && l.feature.properties) || {};
+        const id = p.id || p.code || p.name;
+        const n  = window.B2M_countsDivision.get(id) || 0;
+        // store for your popup template to use
+        p.report_count = n;
+        // if a tooltip/popup is already bound, you can refresh it here if desired
+        if (l.getTooltip && l.getTooltip()) l.setTooltipContent(`${p.name || id}\n${n} report(s)`);
+      });
+    };
+  })();
+
 
     // Map
     const map = L.map("b2m-map", { preferCanvas:true, worldCopyJump:true });
