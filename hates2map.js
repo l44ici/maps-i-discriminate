@@ -200,38 +200,53 @@
   async function countFromData(objs) {
     window.B2M_countsDivision.clear();
     window.B2M_countsState.clear();
+
+    let matchedDivs = 0;
+    let matchedStates = 0;
+
     const get = (o, names) => {
       for (const n of names) if (o[n] !== undefined) return o[n];
       return "";
     };
+
     for (const o of objs) {
       const suburb = norm(get(o, ["Suburb", "suburb", "Town", "City", "Locality"]));
-      const state = asState(get(o, ["State / Territory", "State", "state", "Territory"]));
-      const pc = asPostcode(get(o, ["Post Code", "postcode", "Postcode", "Zip", "PC"]));
-      const lat = +get(o, ["Lat", "Latitude", "lat", "latitude"]);
-      const lon = +get(o, ["Lon", "Lng", "Longitude", "lon", "lng", "longitude"]);
+      const state  = asState(get(o, ["State / Territory", "State", "state", "Territory"]));
+      const pc     = asPostcode(get(o, ["Post Code", "postcode", "Postcode", "Zip", "PC"]));
+      const lat    = +get(o, ["Lat", "Latitude", "lat", "latitude"]);
+      const lon    = +get(o, ["Lon", "Lng", "Longitude", "lon", "lng", "longitude"]);
 
+      // 1. postcode → division
       if (pc) {
         const divId = postcodeToDivision(pc);
-        if (divId) { bumpDiv(divId); continue; }
+        if (divId) { bumpDiv(divId); matchedDivs++; continue; }
       }
+
+      // 2. lat/lon direct → division
       if (Number.isFinite(lat) && Number.isFinite(lon)) {
         const divId = latLonToDivision(lat, lon);
-        if (divId) { bumpDiv(divId); continue; }
-        if (state) { bumpSt(state); continue; }
+        if (divId) { bumpDiv(divId); matchedDivs++; continue; }
+        if (state) { bumpSt(state); matchedStates++; continue; }
         continue;
       }
+
+      // 3. suburb+state → lat/lon → division
       if (suburb && state) {
         const pos = suburbToLatLon(state, suburb, pc);
         if (pos) {
           const divId = latLonToDivision(pos.lat, pos.lon);
-          if (divId) { bumpDiv(divId); continue; }
-          bumpSt(state); continue;
+          if (divId) { bumpDiv(divId); matchedDivs++; continue; }
+          bumpSt(state); matchedStates++; continue;
         }
       }
-      if (state) { bumpSt(state); continue; }
+
+      // 4. state-only fallback
+      if (state) { bumpSt(state); matchedStates++; continue; }
     }
+
+    LOG(`Matched divisions: ${matchedDivs}, states: ${matchedStates}, total: ${objs.length}`);
   }
+
 
   function applyCountsToRegions() {
     if (!regionLayer) return;
