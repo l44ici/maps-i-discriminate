@@ -139,7 +139,6 @@
       if(!ll)continue;
       const [lat,lon]=ll;
       L.circleMarker([lat,lon],pointStyle)
-        .bindTooltip([r[keys.suburb],r[keys.state],r[keys.pc]].filter(Boolean).join(", "),{sticky:true})
         .addTo(bubbles);
       plotted++;
 
