@@ -12,7 +12,6 @@
   // ------- config from PHP / shortcode -------
   const CFG = (typeof B2M === "object" && B2M) || {};
   const ROOT_ID = "b2m-map"; // matches your shortcode
-  // data-* overrides from the shortcode wrapper (optional)
   const WRAP = document.querySelector(".back2maps");
   const DIV_ZOOM = +(WRAP?.dataset?.divzoom || CFG.minZoomForDiv || 6);
 
@@ -23,8 +22,7 @@
   const SUBURBS_URL = CFG.suburbLookup || "suburbs.json";
   const CSV_URL     = CFG.cioDataCsv   || "testData.csv";
   const XLSX_URL    = CFG.cioDataXlsx  || "testData.xlsx";
-  // (Optional) postcode→division index; add later if you have one
-  const PCINDEX_URL = CFG.pcIndexUrl || ""; // not in PHP now; okay to be blank
+  const PCINDEX_URL = CFG.pcIndexUrl || "";
 
   // Australia view box
   const AU_BOUNDS = [[-44.0, 112.0], [-10.0, 154.0]];
@@ -94,12 +92,12 @@
   let map, stateLayer, regionLayer;
   let statesFC = null;
   let regionsFC = null;
-  let suburbIdx = null;  // [{state,suburb,postcode,lat,lon}, ...]
-  let pcIndex   = null;  // {"2541":"NSW-SouthCoast", ...}
+  let suburbIdx = null;
+  let pcIndex   = null;
 
   // public counters
-  window.B2M_countsDivision = window.B2M_countsDivision || new Map(); // divisionId -> n
-  window.B2M_countsState    = window.B2M_countsState    || new Map(); // stateAbbr  -> n
+  window.B2M_countsDivision = window.B2M_countsDivision || new Map();
+  window.B2M_countsState    = window.B2M_countsState    || new Map();
   const bumpDiv = id => { if (!id) return; window.B2M_countsDivision.set(id, (window.B2M_countsDivision.get(id) || 0) + 1); };
   const bumpSt  = st => { if (!st) return; window.B2M_countsState.set(st, (window.B2M_countsState.get(st) || 0) + 1); };
 
@@ -120,7 +118,7 @@
   }
 
   function latLonToDivision(lat, lon) {
-    if (!regionsFC) return null;
+    if (!regionsFC || !Array.isArray(regionsFC.features)) return null;
     const pt = [lon, lat];
     for (const f of regionsFC.features) {
       const g = f.geometry;
@@ -135,23 +133,16 @@
     return null;
   }
 
-  // ---- Load incidents from CSV; if empty and XLSX exists, load XLSX
+  // ---- Load incidents from CSV or XLSX
   async function loadIncidentRows() {
-    // try CSV
     const csvText = await fetchText(CSV_URL);
-    if (csvText && csvText.trim()) {
-      const rows = parseCSV(csvText);
-      return rowsToObjects(rows);
-    }
-
-    // fallback to XLSX if provided
+    if (csvText && csvText.trim()) return rowsToObjects(parseCSV(csvText));
     if (await fetchexists(XLSX_URL) && window.XLSX) {
       const ab = await fetch(XLSX_URL).then(r => r.ok ? r.arrayBuffer() : null);
       if (!ab) return [];
       const wb = XLSX.read(ab, { type: "array" });
       const first = wb.SheetNames[0];
-      const json = XLSX.utils.sheet_to_json(wb.Sheets[first], { defval: "" });
-      return json;
+      return XLSX.utils.sheet_to_json(wb.Sheets[first], { defval: "" });
     }
     return [];
   }
@@ -161,10 +152,8 @@
     const hdr = rows[0].map(h => norm(h));
     const out = [];
     for (let i = 1; i < rows.length; i++) {
-      const r = rows[i];
-      if (!r || r.length === 0) continue;
-      const o = {};
-      for (let c = 0; c < r.length; c++) o[hdr[c] || `col${c}`] = r[c];
+      const r = rows[i]; if (!r || !r.length) continue;
+      const o = {}; for (let c = 0; c < r.length; c++) o[hdr[c] || `col${c}`] = r[c];
       out.push(o);
     }
     return out;
@@ -173,13 +162,7 @@
   async function countFromData(objs) {
     window.B2M_countsDivision.clear();
     window.B2M_countsState.clear();
-
-    // index helpers (accept various header names)
-    const get = (o, names) => {
-      for (const n of names) if (o[n] !== undefined) return o[n];
-      return "";
-    };
-
+    const get = (o, names) => { for (const n of names) if (o[n] !== undefined) return o[n]; return ""; };
     for (const o of objs) {
       const suburb = norm(get(o, ["Suburb", "suburb", "Town", "City", "Locality"]));
       const state  = asState(get(o, ["State / Territory", "State", "state", "Territory"]));
@@ -187,21 +170,13 @@
       const lat    = +get(o, ["Lat", "Latitude", "lat", "latitude"]);
       const lon    = +get(o, ["Lon", "Lng", "Longitude", "lon", "lng", "longitude"]);
 
-      // 1) postcode → division
-      if (pc) {
-        const divId = postcodeToDivision(pc);
-        if (divId) { bumpDiv(divId); continue; }
-      }
-
-      // 2) lat/lon direct → division
+      if (pc) { const divId = postcodeToDivision(pc); if (divId) { bumpDiv(divId); continue; } }
       if (Number.isFinite(lat) && Number.isFinite(lon)) {
         const divId = latLonToDivision(lat, lon);
         if (divId) { bumpDiv(divId); continue; }
         if (state) { bumpSt(state); continue; }
         continue;
       }
-
-      // 3) suburb+state → lat/lon → division
       if (suburb && state) {
         const pos = suburbToLatLon(state, suburb, pc);
         if (pos) {
@@ -210,11 +185,7 @@
           bumpSt(state); continue;
         }
       }
-
-      // 4) state-only fallback
       if (state) { bumpSt(state); continue; }
-
-      // 5) otherwise ignore
     }
   }
 
@@ -224,8 +195,6 @@
       const p = (l.feature && l.feature.properties) || {};
       const id = p.id || p.code || p.name;
       const n = window.B2M_countsDivision.get(id) || 0;
-      p.report_count = n;
-
       const title = (p.name || id || "(unknown)");
       const st = p.state || p.ST || p.st || "—";
       const html = `<strong>${title}</strong><br>State: ${st}<br>${n} report(s)`;
@@ -234,7 +203,18 @@
     });
   }
 
-  function styleState()  { return { weight: 2, color: "#64748b", fillColor: "#f8fafc", fillOpacity: 0.18 }; }
+  function applyCountsToStates() {
+    if (!stateLayer) return;
+    stateLayer.eachLayer(l => {
+      const p = (l.feature && l.feature.properties) || {};
+      const name = p.STATE_NAME || p.STATE || p.Name || p.name || "State";
+      const abbr = (p.ST || p.STATE_ABBR || p.state_abbrev || p.State || p.state || name).toString().toUpperCase();
+      const n = (window.B2M_countsState && window.B2M_countsState.get(abbr)) || 0;
+      if (l.getPopup && l.getPopup()) l.setPopupContent(`<strong>${name}</strong><br>${n} report(s)`);
+    });
+  }
+
+  function styleState()  { return { weight: 2.5, color: "#475569", fillColor: "#e5e7eb", fillOpacity: 0.25 }; }
   function styleRegion() { return { weight: 1, color: "#475569", fillColor: "#cbd5e1", fillOpacity: 0.04 }; }
 
   function ensureRootElement() {
@@ -260,12 +240,9 @@
     }
 
     const root = ensureRootElement();
-
-    // Map
     window.B2M_map = L.map(root, { zoomControl: true, minZoom: 3, maxZoom: 12 });
     window.B2M_map.fitBounds(AU_BOUNDS);
 
-    // Load datasets
     const [states, regions, suburbs, pcidx] = await Promise.all([
       fetchJSON(STATES_URL),
       fetchJSON(REGIONS_URL),
@@ -274,22 +251,28 @@
     ]);
 
     statesFC = states && states.type ? states : null;
-
-    // Regions: TopoJSON or GeoJSON
-    if (regions && regions.type === "Topology") {
-      regionsFC = topoToGeo(regions, REGIONS_OBJ);
-    } else {
-      regionsFC = regions && regions.type ? regions : null;
-    }
-
+    regionsFC = regions && regions.type ? regions : null;
     suburbIdx = Array.isArray(suburbs) ? suburbs : null;
     pcIndex   = (pcidx && typeof pcidx === "object") ? pcidx : null;
 
     if (statesFC) {
-      stateLayer = L.geoJSON(statesFC, { style: styleState }).addTo(B2M_map);
+      stateLayer = L.geoJSON(statesFC, {
+        style: styleState,
+        onEachFeature: (feat, layer) => {
+          const p = feat.properties || {};
+          const name = p.STATE_NAME || p.STATE || p.Name || p.name || "State";
+          const abbr = (p.ST || p.STATE_ABBR || p.state_abbrev || p.State || p.state || name).toString().toUpperCase();
+          const n = (window.B2M_countsState && window.B2M_countsState.get(abbr)) || 0;
+          layer.bindPopup(`<strong>${name}</strong><br>${n} report(s)`);
+          layer.on({
+            mouseover: e => e.target.setStyle({ weight: 3 }),
+            mouseout:  e => stateLayer.resetStyle(e.target)
+          });
+        }
+      }).addTo(B2M_map);
     }
 
-    if (regionsFC) {
+    if (regionsFC && Array.isArray(regionsFC.features)) {
       regionLayer = L.geoJSON(regionsFC, {
         style: styleRegion,
         onEachFeature: (feat, layer) => {
@@ -300,8 +283,6 @@
           layer.bindPopup(`<strong>${p.name || id || "(unknown)"}</strong><br>State: ${st}<br>${n} report(s)`);
         }
       });
-
-      // Show divisions only when zoomed in
       const toggleRegions = () => {
         const on = B2M_map.getZoom() >= DIV_ZOOM;
         if (on && !B2M_map.hasLayer(regionLayer)) B2M_map.addLayer(regionLayer);
@@ -311,10 +292,10 @@
       toggleRegions();
     }
 
-    // Load incidents, count, then update UI
     const rows = await loadIncidentRows();
     await countFromData(rows);
     applyCountsToRegions();
+    applyCountsToStates();
 
     setTimeout(() => B2M_map.invalidateSize(), 100);
   }
