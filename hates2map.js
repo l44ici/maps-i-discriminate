@@ -93,6 +93,8 @@
 
   // ---------- main ----------
   document.addEventListener("DOMContentLoaded", async () => {
+
+
     // Map
     const map = L.map("b2m-map", { preferCanvas:true, worldCopyJump:true });
     map.fitBounds(AU_BOUNDS);
@@ -127,7 +129,7 @@
       filter: f => ["Polygon","MultiPolygon"].includes(f?.geometry?.type),
       style: f => styleForCount(0),
       onEachFeature: (f, layer) => {
-        const id = regionIdOf(f) || "(unknown)";
+        const id = regionIdOf(f);
         layer.on({
           mouseover: () => layer.setStyle({ weight:2, color:"#71797E", fillOpacity:0.75, fillColor:getColor(countsByDivision.get(id)||0) }),
           mouseout:  () => layer.setStyle(styleForCount(countsByDivision.get(id)||0)),
