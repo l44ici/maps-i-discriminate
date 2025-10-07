@@ -110,7 +110,7 @@
   async function buildMap(){
     if(typeof L==="undefined"){console.error("[B2M] Leaflet missing");return;}
 
-    const map=L.map('b2m-map',{zoomControl:true,minZoom:4.5,maxZoom:8, maxBounds: AU_CLAMP_BOUNDS, maxBoundsViscosity: 1.0, worldCopyJump: false, intertia: false});
+    const map=L.map('b2m-map',{zoomControl:true,minZoom:4,maxZoom:8, maxBounds: AU_CLAMP_BOUNDS, maxBoundsViscosity: 1.0, worldCopyJump: false, intertia: false});
     map.fitBounds(AU_BOUNDS);
 
     const [states,regions]=await Promise.all([fetchJSON(STATES_URL),fetchJSON(REGIONS_URL)]);
